@@ -7,3 +7,7 @@
 
 [build.environment]
   NODE_VERSION = "20"
+
+[build.secrets]
+  # Allow these public variables in build output
+  omitKeys = ["NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME", "NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET"]
