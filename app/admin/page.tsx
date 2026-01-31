@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import AdminDashboard from "@/components/AdminDashboard";
 
 declare global {
   interface Window {
@@ -12,7 +13,6 @@ export default function AdminPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [uploadedCount, setUploadedCount] = useState(0);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,45 +32,9 @@ export default function AdminPage() {
     }
   };
 
-  const openUploadWidget = () => {
-    if (typeof window !== "undefined" && window.cloudinary) {
-      const widget = window.cloudinary.createUploadWidget(
-        {
-          cloudName: process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME,
-          uploadPreset: process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET,
-          folder: "gallery",
-          sources: ["local", "camera"],
-          multiple: true,
-          maxFiles: 50,
-          resourceType: "image",
-          clientAllowedFormats: ["jpg", "jpeg", "png", "webp", "heic", "heif"],
-          maxFileSize: 20000000,
-          styles: {
-            palette: {
-              window: "#050505",
-              windowBorder: "#333",
-              tabIcon: "#fff",
-              menuIcons: "#fff",
-              textDark: "#000",
-              textLight: "#fff",
-              link: "#fff",
-              action: "#339933",
-              inactiveTabIcon: "#666",
-              error: "#ff4444",
-              inProgress: "#339933",
-              complete: "#339933",
-              sourceBg: "#111",
-            },
-          },
-        },
-        (error: any, result: any) => {
-          if (!error && result && result.event === "success") {
-            setUploadedCount((prev) => prev + 1);
-          }
-        }
-      );
-      widget.open();
-    }
+  const handleLogout = () => {
+    localStorage.removeItem("admin_auth");
+    setIsAuthenticated(false);
   };
 
   useEffect(() => {
@@ -115,42 +79,5 @@ export default function AdminPage() {
     );
   }
 
-  return (
-    <main className="min-h-screen flex flex-col items-center justify-center p-4">
-      <h1 className="text-sm font-light tracking-[0.2em] text-white/80 mb-8">
-        UPLOAD
-      </h1>
-
-      <button
-        onClick={openUploadWidget}
-        className="bg-white text-black px-8 py-4 text-sm font-medium rounded hover:bg-white/90 transition-colors mb-6"
-      >
-        Select Photos
-      </button>
-
-      {uploadedCount > 0 && (
-        <p className="text-white/60 text-sm">
-          {uploadedCount} photo{uploadedCount > 1 ? "s" : ""} uploaded
-        </p>
-      )}
-
-      <div className="mt-12 space-y-4 text-center">
-        <a
-          href="/"
-          className="block text-white/40 text-xs hover:text-white/60 transition-colors"
-        >
-          View Gallery →
-        </a>
-        <button
-          onClick={() => {
-            localStorage.removeItem("admin_auth");
-            setIsAuthenticated(false);
-          }}
-          className="text-white/40 text-xs hover:text-white/60 transition-colors"
-        >
-          Logout
-        </button>
-      </div>
-    </main>
-  );
+  return <AdminDashboard onLogout={handleLogout} />;
 }

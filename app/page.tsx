@@ -1,10 +1,14 @@
 import Gallery from "@/components/Gallery";
-import { getImages } from "@/lib/cloudinary";
+import { getImages, getCollections } from "@/lib/cloudinary";
+import CollectionsNav from "@/components/CollectionsNav";
 
 export const revalidate = 60;
 
 export default async function Home() {
-  const images = await getImages("gallery");
+  const [images, collections] = await Promise.all([
+    getImages("gallery"),
+    getCollections(),
+  ]);
 
   return (
     <main className="min-h-screen">
@@ -16,7 +20,9 @@ export default async function Home() {
         </div>
       </header>
       
-      <div className="pt-20 pb-8 px-1 sm:px-2">
+      <CollectionsNav collections={collections} />
+      
+      <div className="pt-32 pb-8 px-1 sm:px-2">
         <Gallery images={images} />
       </div>
     </main>
