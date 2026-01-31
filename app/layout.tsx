@@ -9,9 +9,9 @@ export const metadata: Metadata = {
   description: "Personal photo gallery",
   metadataBase: new URL("https://abdul.no"),
   icons: {
-    icon: "/assets/logo.ico",
-    shortcut: "/assets/logo.ico",
-    apple: "/assets/logo.png",
+    icon: "/logo.ico",
+    shortcut: "/logo.ico",
+    apple: "/logo.png",
   },
   openGraph: {
     title: "Abdul",

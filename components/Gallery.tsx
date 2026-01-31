@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import type { CloudinaryImage } from "@/lib/cloudinary";
 
 interface GalleryProps {
@@ -10,6 +10,14 @@ interface GalleryProps {
 
 export default function Gallery({ images }: GalleryProps) {
   const [selectedImage, setSelectedImage] = useState<CloudinaryImage | null>(null);
+
+  const handleImageClick = useCallback((image: CloudinaryImage) => {
+    setSelectedImage(image);
+  }, []);
+
+  const closeModal = useCallback(() => {
+    setSelectedImage(null);
+  }, []);
 
   if (images.length === 0) {
     return (
@@ -21,23 +29,25 @@ export default function Gallery({ images }: GalleryProps) {
 
   return (
     <>
-      <div className="columns-1 sm:columns-2 lg:columns-3 gap-1 sm:gap-2">
-        {images.map((image) => (
+      {/* CSS Columns Masonry Layout - eliminates black gaps */}
+      <div className="columns-2 md:columns-3 lg:columns-4 gap-2">
+        {images.map((image, index) => (
           <div
             key={image.public_id}
-            className="mb-1 sm:mb-2 break-inside-avoid cursor-pointer"
-            onClick={() => setSelectedImage(image)}
+            className="mb-2 break-inside-avoid cursor-pointer group active:opacity-70 transition-opacity duration-150"
+            onClick={() => handleImageClick(image)}
           >
             <Image
               src={image.secure_url}
               alt=""
               width={image.width}
               height={image.height}
-              placeholder="blur"
+              placeholder={image.blur_data_url ? "blur" : "empty"}
               blurDataURL={image.blur_data_url}
-              className="w-full h-auto"
-              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-              loading="lazy"
+              className="w-full h-auto rounded-sm"
+              sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+              loading={index < 8 ? "eager" : "lazy"}
+              style={{ imageOrientation: "from-image" }}
             />
           </div>
         ))}
@@ -46,11 +56,11 @@ export default function Gallery({ images }: GalleryProps) {
       {selectedImage && (
         <div
           className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-4"
-          onClick={() => setSelectedImage(null)}
+          onClick={closeModal}
         >
           <button
             className="absolute top-4 right-4 text-white/60 hover:text-white text-2xl"
-            onClick={() => setSelectedImage(null)}
+            onClick={closeModal}
             aria-label="Close"
           >
             ✕
@@ -60,8 +70,9 @@ export default function Gallery({ images }: GalleryProps) {
             alt=""
             width={selectedImage.width}
             height={selectedImage.height}
-            className="max-h-[90vh] max-w-full w-auto h-auto object-contain"
+            className="max-h-[90vh] max-w-full w-auto h-auto object-contain rounded-sm"
             priority
+            style={{ imageOrientation: "from-image" }}
           />
         </div>
       )}

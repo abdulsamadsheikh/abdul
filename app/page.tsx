@@ -15,7 +15,7 @@ export default async function Home() {
       <header className="fixed top-0 left-0 right-0 z-40 bg-background/80 backdrop-blur-sm">
         <div className="px-4 py-6 flex items-center gap-3">
           <img 
-            src="/assets/logo.png" 
+            src="/logo.png" 
             alt="Abdul" 
             className="w-8 h-8 rounded-full"
           />

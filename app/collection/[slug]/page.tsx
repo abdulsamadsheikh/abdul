@@ -20,9 +20,23 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
 
   const collection = collections.find(c => c.name === collectionName);
 
-  if (!collection && images.length === 0) {
-    notFound();
-  }
+  // Check if this is a valid collection (exists in collections or has images)
+  const isValidCollection = collection || images.length > 0;
+  
+  // Fun messages for invalid collections
+  const getFunMessage = () => {
+    const messages = [
+      "You're early! This collection hasn't been created yet.",
+      "Oops! You found a collection that doesn't exist... yet.",
+      "This collection is still loading into the future.",
+      "You've discovered a phantom collection! Spooky.",
+      "This collection is on vacation. Try again later.",
+      "404: Collection not found, but your adventure continues!",
+      "This collection is playing hide and seek. You found it!",
+      "Early bird gets the... empty collection?",
+    ];
+    return messages[Math.floor(Math.random() * messages.length)];
+  };
 
   return (
     <main className="min-h-screen">
@@ -37,31 +51,55 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
             </Link>
             <div className="flex items-center gap-3">
               <img 
-                src="/assets/logo.png" 
+                src="/logo.png" 
                 alt="Abdul" 
                 className="w-8 h-8 rounded-full"
               />
-              <h1 className="text-sm font-light tracking-[0.2em] text-white/80 uppercase">
-                {collectionName}
+              <h1 className="text-sm font-light tracking-[0.2em] text-white/80">
+                {collectionName.charAt(0).toUpperCase() + collectionName.slice(1)}
               </h1>
             </div>
           </div>
-          {collection && (
-            <span className="text-white/40 text-sm">
-              {collection.count} photos
-            </span>
-          )}
+          <span className="text-white/40 text-sm">
+            {collection ? `${collection.count} photos` : `${images.length} photos`}
+          </span>
         </div>
       </header>
       
       <div className="pt-20 pb-8 px-1 sm:px-2">
-        {images.length > 0 ? (
+        {isValidCollection && images.length > 0 ? (
           <Gallery images={images} />
-        ) : (
+        ) : isValidCollection ? (
           <div className="flex items-center justify-center min-h-[50vh]">
             <p className="text-white/40 text-sm tracking-wide">
               No photos in this collection yet
             </p>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center min-h-[50vh] px-4">
+            <div className="text-center max-w-md">
+              <h2 className="text-white/60 text-lg font-light mb-4">
+                {collectionName.charAt(0).toUpperCase() + collectionName.slice(1)}
+              </h2>
+              <p className="text-white/40 text-sm tracking-wide mb-6">
+                {getFunMessage()}
+              </p>
+              <div className="space-y-2">
+                <Link
+                  href="/"
+                  className="inline-block text-white/60 hover:text-white text-sm transition-colors"
+                >
+                  ← Back to Gallery
+                </Link>
+                <br />
+                <Link
+                  href="/admin"
+                  className="inline-block text-white/40 hover:text-white/60 text-xs transition-colors"
+                >
+                  Create this collection →
+                </Link>
+              </div>
+            </div>
           </div>
         )}
       </div>

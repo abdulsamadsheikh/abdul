@@ -143,6 +143,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
     setIsLoading(true);
     try {
+      const collectionName = newCollectionName.trim().toLowerCase();
       const addPromises = Array.from(selectedImages).map(async (publicId) => {
         const res = await fetch("/api/images", {
           method: "PATCH",
@@ -150,7 +151,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
           body: JSON.stringify({
             publicId,
             action: "addToCollection",
-            collection: newCollectionName.trim(),
+            collection: collectionName,
           }),
         });
         return res.ok;
@@ -160,7 +161,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       const successCount = results.filter(Boolean).length;
 
       if (successCount === selectedImages.size) {
-        showNotification("success", `Added ${successCount} images to "${newCollectionName}"`);
+        showNotification("success", `Added ${successCount} images to "${collectionName}"`);
         setNewCollectionName("");
         setSelectedImages(new Set());
       } else {
@@ -219,7 +220,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         <div className="px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img 
-              src="/assets/logo.png" 
+              src="/logo.png" 
               alt="Abdul" 
               className="w-8 h-8 rounded-full"
             />

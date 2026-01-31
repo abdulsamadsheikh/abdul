@@ -30,32 +30,40 @@ export async function getImages(folder: string = "gallery"): Promise<CloudinaryI
     const result = await cloudinary.search
       .expression(`folder:${folder}`)
       .sort_by("created_at", "desc")
-      .max_results(100)
+      .max_results(50) // Reduced from 100
+      .with_field("context") // Get context in single call
       .execute();
 
-    const images: CloudinaryImage[] = await Promise.all(
-      result.resources.map(async (resource: any) => {
-        const blurUrl = cloudinary.url(resource.public_id, {
-          width: 10,
-          quality: 30,
-          effect: "blur:1000",
-          format: "webp",
-          angle: "auto_right",
-        });
+    // Generate optimized URLs with Cloudinary transformations
+    const images: CloudinaryImage[] = result.resources.map((resource: any) => {
+      // Generate a simple base64 blur placeholder
+      const blurDataURL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A8A";
 
-        return {
-          public_id: resource.public_id,
-          secure_url: resource.secure_url,
-          width: resource.width,
-          height: resource.height,
-          format: resource.format,
-          created_at: resource.created_at,
-          blur_data_url: blurUrl,
-          folder: resource.folder,
-          context: resource.context || {},
-        };
-      })
-    );
+      // Build optimized URL with transformations: f_auto, q_auto, w_800, a_auto (EXIF fix)
+      const optimizedUrl = cloudinary.url(resource.public_id, {
+        transformation: [
+          { width: 800, crop: "limit" },
+          { quality: "auto", fetch_format: "auto" },
+          { angle: "auto" }
+        ]
+      });
+
+      // Calculate height based on aspect ratio for 800px width
+      const aspectRatio = resource.height / resource.width;
+      const optimizedHeight = Math.round(800 * aspectRatio);
+
+      return {
+        public_id: resource.public_id,
+        secure_url: optimizedUrl,
+        width: 800,
+        height: optimizedHeight,
+        format: resource.format,
+        created_at: resource.created_at,
+        blur_data_url: blurDataURL,
+        folder: resource.folder,
+        context: resource.context || {},
+      };
+    });
 
     return images;
   } catch (error) {
@@ -66,22 +74,45 @@ export async function getImages(folder: string = "gallery"): Promise<CloudinaryI
 
 export async function getImagesByCollection(collection: string): Promise<CloudinaryImage[]> {
   try {
+    // Use a simpler approach - get all images and filter
     const result = await cloudinary.search
-      .expression(`folder:gallery AND context.collection=${collection}`)
+      .expression(`folder:gallery`)
+      .with_field("context")
       .sort_by("created_at", "desc")
       .max_results(100)
       .execute();
 
-    return result.resources.map((resource: any) => ({
-      public_id: resource.public_id,
-      secure_url: resource.secure_url,
-      width: resource.width,
-      height: resource.height,
-      format: resource.format,
-      created_at: resource.created_at,
-      folder: resource.folder,
-      context: resource.context || {},
-    }));
+    const filteredImages = result.resources
+      .filter((resource: any) => resource.context?.collection === collection)
+      .map((resource: any) => {
+        const blurDataURL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A8A";
+
+        // Build optimized URL with transformations
+        const optimizedUrl = cloudinary.url(resource.public_id, {
+          transformation: [
+            { width: 800, crop: "limit" },
+            { quality: "auto", fetch_format: "auto" },
+            { angle: "auto" }
+          ]
+        });
+
+        const aspectRatio = resource.height / resource.width;
+        const optimizedHeight = Math.round(800 * aspectRatio);
+
+        return {
+          public_id: resource.public_id,
+          secure_url: optimizedUrl,
+          width: 800,
+          height: optimizedHeight,
+          format: resource.format,
+          created_at: resource.created_at,
+          blur_data_url: blurDataURL,
+          folder: resource.folder,
+          context: resource.context || {},
+        };
+      });
+
+    return filteredImages;
   } catch (error) {
     console.error("Error fetching collection images:", error);
     return [];
@@ -90,9 +121,9 @@ export async function getImagesByCollection(collection: string): Promise<Cloudin
 
 export async function getCollections(): Promise<Collection[]> {
   try {
-    // Get all images with collection context
+    // Get all images first, then filter for collections
     const result = await cloudinary.search
-      .expression(`folder:gallery AND context.collection=*`)
+      .expression(`folder:gallery`)
       .with_field("context")
       .max_results(500)
       .execute();
