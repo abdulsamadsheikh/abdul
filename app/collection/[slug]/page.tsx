@@ -35,9 +35,16 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
             >
               ← Back
             </Link>
-            <h1 className="text-sm font-light tracking-[0.2em] text-white/80 uppercase">
-              {collectionName}
-            </h1>
+            <div className="flex items-center gap-3">
+              <img 
+                src="/assets/logo.png" 
+                alt="Abdul" 
+                className="w-8 h-8 rounded-full"
+              />
+              <h1 className="text-sm font-light tracking-[0.2em] text-white/80 uppercase">
+                {collectionName}
+              </h1>
+            </div>
           </div>
           {collection && (
             <span className="text-white/40 text-sm">

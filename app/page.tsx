@@ -13,7 +13,12 @@ export default async function Home() {
   return (
     <main className="min-h-screen">
       <header className="fixed top-0 left-0 right-0 z-40 bg-background/80 backdrop-blur-sm">
-        <div className="px-4 py-6">
+        <div className="px-4 py-6 flex items-center gap-3">
+          <img 
+            src="/assets/logo.png" 
+            alt="Abdul" 
+            className="w-8 h-8 rounded-full"
+          />
           <h1 className="text-sm font-light tracking-[0.2em] text-white/80">
             ABDUL
           </h1>

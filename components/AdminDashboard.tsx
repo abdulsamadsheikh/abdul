@@ -217,13 +217,28 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       {/* Header */}
       <header className="fixed top-0 left-0 right-0 z-40 bg-background/80 backdrop-blur-sm border-b border-white/10">
         <div className="px-4 py-4 flex items-center justify-between">
-          <h1 className="text-sm font-light tracking-[0.2em] text-white/80">ADMIN</h1>
-          <button
-            onClick={onLogout}
-            className="text-white/60 text-xs hover:text-white/80 transition-colors"
-          >
-            Logout
-          </button>
+          <div className="flex items-center gap-3">
+            <img 
+              src="/assets/logo.png" 
+              alt="Abdul" 
+              className="w-8 h-8 rounded-full"
+            />
+            <h1 className="text-sm font-light tracking-[0.2em] text-white/80">ADMIN</h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <a
+              href="/"
+              className="text-white/60 text-xs hover:text-white/80 transition-colors"
+            >
+              → Gallery
+            </a>
+            <button
+              onClick={onLogout}
+              className="text-white/60 text-xs hover:text-white/80 transition-colors"
+            >
+              Logout
+            </button>
+          </div>
         </div>
       </header>
 
