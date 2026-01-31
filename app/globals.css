@@ -19,8 +19,22 @@ body {
   background: rgba(255, 255, 255, 0.2);
 }
 
+/* Fix EXIF orientation for mobile photos */
+img {
+  image-orientation: from-image;
+}
+
 /* Hide scrollbar but keep functionality */
 ::-webkit-scrollbar {
   width: 0px;
   background: transparent;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
 }

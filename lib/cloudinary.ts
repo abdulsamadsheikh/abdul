@@ -40,6 +40,7 @@ export async function getImages(folder: string = "gallery"): Promise<CloudinaryI
           quality: 30,
           effect: "blur:1000",
           format: "webp",
+          angle: "auto_right",
         });
 
         return {
@@ -158,7 +159,7 @@ export async function addImageToCollection(publicId: string, collection: string)
 
 export async function removeFromCollection(publicId: string): Promise<boolean> {
   try {
-    await cloudinary.uploader.remove_context("collection", [publicId]);
+    await cloudinary.uploader.remove_all_context([publicId]);
     return true;
   } catch (error) {
     console.error("Error removing from collection:", error);
@@ -173,6 +174,7 @@ export function getOptimizedUrl(publicId: string, width: number): string {
     quality: "auto",
     format: "auto",
     fetch_format: "auto",
+    angle: "auto_right",
   });
 }
 
