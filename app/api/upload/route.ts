@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { v2 as cloudinary } from "cloudinary";
 
 cloudinary.config({
@@ -39,6 +40,9 @@ export async function POST(request: NextRequest) {
         }
       ).end(buffer);
     });
+
+    // Invalidate the cache so new images appear immediately
+    revalidateTag("cloudinary-images", "max");
 
     return NextResponse.json({ success: true, result });
   } catch (error) {

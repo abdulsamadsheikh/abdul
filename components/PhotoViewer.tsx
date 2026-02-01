@@ -1,7 +1,6 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useCallback, useState, useRef } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -29,13 +28,15 @@ export default function PhotoViewer({
   collection,
 }: PhotoViewerProps) {
   const router = useRouter();
-  const [touchStart, setTouchStart] = useState<number | null>(null);
-  const [touchEnd, setTouchEnd] = useState<number | null>(null);
+  const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
+  const [touchEnd, setTouchEnd] = useState<{ x: number; y: number } | null>(null);
   const [isNavigating, setIsNavigating] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Minimum swipe distance (in px)
   const minSwipeDistance = 50;
+  // Maximum distance for a tap (not a swipe)
+  const maxTapDistance = 10;
 
   // Build URL with optional collection query param
   const buildPhotoUrl = (id: string) => {
@@ -61,9 +62,15 @@ export default function PhotoViewer({
     [router, isNavigating, collection]
   );
 
-  const goBack = useCallback(() => {
+  // Direct navigation to gallery/collection (for X button and taps)
+  const exitViewer = useCallback(() => {
     router.push(backUrl);
   }, [router, backUrl]);
+
+  // Browser back (for Escape key - preserves scroll)
+  const goBack = useCallback(() => {
+    router.back();
+  }, [router]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -88,27 +95,69 @@ export default function PhotoViewer({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [navigateTo, goBack, nextId, prevId]);
 
-  // Touch handlers for swipe
+  // Touch handlers for swipe and tap
   const onTouchStart = (e: React.TouchEvent) => {
     setTouchEnd(null);
-    setTouchStart(e.targetTouches[0].clientX);
+    setTouchStart({
+      x: e.targetTouches[0].clientX,
+      y: e.targetTouches[0].clientY,
+    });
   };
 
   const onTouchMove = (e: React.TouchEvent) => {
-    setTouchEnd(e.targetTouches[0].clientX);
+    setTouchEnd({
+      x: e.targetTouches[0].clientX,
+      y: e.targetTouches[0].clientY,
+    });
   };
 
-  const onTouchEnd = () => {
-    if (!touchStart || !touchEnd) return;
+  // Check if element is part of interactive UI (buttons, image)
+  const isInteractiveElement = (target: HTMLElement): boolean => {
+    // Check if it's a button or inside a button
+    if (target.tagName === 'BUTTON' || target.closest('button')) return true;
+    // Check if it's the image or image container
+    if (target.tagName === 'IMG' || target.closest('[data-image-container]')) return true;
+    // Check if it's the date/counter footer
+    if (target.closest('[data-footer]')) return true;
+    return false;
+  };
 
-    const distance = touchStart - touchEnd;
-    const isLeftSwipe = distance > minSwipeDistance;
-    const isRightSwipe = distance < -minSwipeDistance;
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (!touchStart) return;
 
-    if (isLeftSwipe) {
-      navigateTo(nextId);
-    } else if (isRightSwipe) {
-      navigateTo(prevId);
+    const target = e.target as HTMLElement;
+
+    // If no movement, treat as tap
+    if (!touchEnd) {
+      // Tap on non-interactive area = exit
+      if (!isInteractiveElement(target)) {
+        exitViewer();
+      }
+      return;
+    }
+
+    const distanceX = touchStart.x - touchEnd.x;
+    const distanceY = Math.abs(touchStart.y - touchEnd.y);
+    const totalDistance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
+
+    // If very small movement, treat as tap
+    if (totalDistance < maxTapDistance) {
+      if (!isInteractiveElement(target)) {
+        exitViewer();
+      }
+      return;
+    }
+
+    // Only horizontal swipes (not vertical scrolling)
+    if (distanceY < Math.abs(distanceX)) {
+      const isLeftSwipe = distanceX > minSwipeDistance;
+      const isRightSwipe = distanceX < -minSwipeDistance;
+
+      if (isLeftSwipe) {
+        navigateTo(nextId);
+      } else if (isRightSwipe) {
+        navigateTo(prevId);
+      }
     }
   };
 
@@ -122,13 +171,22 @@ export default function PhotoViewer({
     });
   };
 
+  // Handle click on background (desktop)
+  const handleBackgroundClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (!isInteractiveElement(target)) {
+      exitViewer();
+    }
+  };
+
   return (
     <div
       ref={containerRef}
-      className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center select-none"
+      className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center select-none cursor-pointer"
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
+      onClick={handleBackgroundClick}
     >
       {/* Prefetch next/prev images */}
       {prevImageUrl && (
@@ -139,9 +197,9 @@ export default function PhotoViewer({
       )}
 
       {/* Close button */}
-      <Link
-        href={backUrl}
-        className="absolute top-4 right-4 z-50 text-white/40 hover:text-white/80 transition-colors p-2"
+      <button
+        onClick={exitViewer}
+        className="absolute top-4 right-4 z-50 text-white/40 hover:text-white/80 transition-colors p-2 cursor-pointer"
         aria-label="Close"
       >
         <svg
@@ -157,7 +215,7 @@ export default function PhotoViewer({
           <line x1="18" y1="6" x2="6" y2="18" />
           <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
-      </Link>
+      </button>
 
       {/* Navigation arrows */}
       {prevId && (
@@ -180,10 +238,26 @@ export default function PhotoViewer({
         </button>
       )}
 
-      {/* Main image container */}
+      {/* Tap/click background overlay - captures taps outside the image */}
       <div 
-        className="relative w-full h-full flex items-center justify-center p-4 sm:p-8 md:p-12"
+        className="absolute inset-0 z-10"
+        onClick={exitViewer}
+        onTouchEnd={(e) => {
+          // Prevent if there was significant movement (swipe)
+          if (touchEnd && touchStart) {
+            const dist = Math.abs(touchStart.x - touchEnd.x) + Math.abs(touchStart.y - touchEnd.y);
+            if (dist > maxTapDistance) return;
+          }
+          exitViewer();
+        }}
+      />
+
+      {/* Main image container - z-20 to be above tap overlay */}
+      <div 
+        data-image-container
+        className="relative z-20 flex items-center justify-center p-4 sm:p-8 md:p-12"
         onClick={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
       >
         <Image
           src={image.secure_url}
@@ -199,7 +273,7 @@ export default function PhotoViewer({
       </div>
 
       {/* Date and counter at bottom */}
-      <div className="absolute bottom-4 left-0 right-0 flex justify-center items-center gap-4 text-white/30 text-xs tracking-wide">
+      <div data-footer className="absolute bottom-4 left-0 right-0 flex justify-center items-center gap-4 text-white/30 text-xs tracking-wide pointer-events-none">
         <span>{formatDate(image.created_at)}</span>
         <span>·</span>
         <span>

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { getImages, getImagesByCollection, deleteImage, addImageToCollection, removeFromCollection } from "@/lib/cloudinary";
 
 export async function GET(request: Request) {
@@ -30,6 +31,7 @@ export async function DELETE(request: Request) {
     const success = await deleteImage(publicId);
     
     if (success) {
+      revalidateTag("cloudinary-images", "max");
       return NextResponse.json({ success: true });
     } else {
       return NextResponse.json({ error: "Failed to delete image" }, { status: 500 });
@@ -57,6 +59,7 @@ export async function PATCH(request: Request) {
     }
 
     if (success) {
+      revalidateTag("cloudinary-images", "max");
       return NextResponse.json({ success: true });
     } else {
       return NextResponse.json({ error: "Failed to update image" }, { status: 500 });
