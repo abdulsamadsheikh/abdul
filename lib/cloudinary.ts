@@ -1,4 +1,5 @@
 import { v2 as cloudinary } from "cloudinary";
+import { getPhotoId, getFullPublicId } from "./utils";
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -207,6 +208,110 @@ export function getOptimizedUrl(publicId: string, width: number): string {
     fetch_format: "auto",
     angle: "auto_right",
   });
+}
+
+// Re-export from utils for backward compatibility
+export { getPhotoId, getFullPublicId } from "./utils";
+
+export async function getImageByPhotoId(photoId: string, folder: string = "gallery"): Promise<CloudinaryImage | null> {
+  try {
+    const fullPublicId = getFullPublicId(photoId, folder);
+    const result = await cloudinary.api.resource(fullPublicId, {
+      colors: false,
+      faces: false,
+    });
+
+    const blurDataURL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A8A";
+
+    // Build full-screen optimized URL
+    const fullScreenUrl = cloudinary.url(result.public_id, {
+      transformation: [
+        { width: 1920, crop: "limit" },
+        { quality: "auto:best", fetch_format: "auto" },
+        { angle: "auto" }
+      ]
+    });
+
+    return {
+      public_id: result.public_id,
+      secure_url: fullScreenUrl,
+      width: result.width,
+      height: result.height,
+      format: result.format,
+      created_at: result.created_at,
+      blur_data_url: blurDataURL,
+      folder: result.folder,
+      context: result.context || {},
+    };
+  } catch (error) {
+    console.error("Error fetching image by ID:", error);
+    return null;
+  }
+}
+
+export async function getAllPhotoIds(folder: string = "gallery"): Promise<string[]> {
+  try {
+    const result = await cloudinary.search
+      .expression(`folder:${folder}`)
+      .sort_by("created_at", "desc")
+      .max_results(500)
+      .execute();
+
+    return result.resources.map((resource: any) => getPhotoId(resource.public_id));
+  } catch (error) {
+    console.error("Error fetching all photo IDs:", error);
+    return [];
+  }
+}
+
+export async function getPhotoIdsByCollection(collection: string): Promise<string[]> {
+  try {
+    const result = await cloudinary.search
+      .expression(`folder:gallery`)
+      .with_field("context")
+      .sort_by("created_at", "desc")
+      .max_results(500)
+      .execute();
+
+    return result.resources
+      .filter((resource: any) => resource.context?.collection === collection)
+      .map((resource: any) => getPhotoId(resource.public_id));
+  } catch (error) {
+    console.error("Error fetching collection photo IDs:", error);
+    return [];
+  }
+}
+
+export async function getAdjacentPhotos(
+  currentPhotoId: string,
+  collection?: string
+): Promise<{ prev: string | null; next: string | null; total: number; currentIndex: number }> {
+  try {
+    // Get photo IDs based on whether we're in a collection or not
+    const allIds = collection 
+      ? await getPhotoIdsByCollection(collection)
+      : await getAllPhotoIds("gallery");
+    
+    const currentIndex = allIds.indexOf(currentPhotoId);
+    
+    if (currentIndex === -1) {
+      return { prev: null, next: null, total: 0, currentIndex: -1 };
+    }
+
+    // Loop navigation: last->first, first->last
+    const prevIndex = currentIndex === 0 ? allIds.length - 1 : currentIndex - 1;
+    const nextIndex = currentIndex === allIds.length - 1 ? 0 : currentIndex + 1;
+
+    return {
+      prev: allIds[prevIndex],
+      next: allIds[nextIndex],
+      total: allIds.length,
+      currentIndex,
+    };
+  } catch (error) {
+    console.error("Error fetching adjacent photos:", error);
+    return { prev: null, next: null, total: 0, currentIndex: -1 };
+  }
 }
 
 export default cloudinary;

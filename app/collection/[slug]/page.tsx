@@ -69,7 +69,7 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
       
       <div className="pt-20 pb-8 px-1 sm:px-2">
         {images.length > 0 ? (
-          <Gallery images={images} />
+          <Gallery images={images} collection={collectionName} />
         ) : (
           <div className="flex items-center justify-center min-h-[50vh] px-4">
             <div className="text-center max-w-md">
