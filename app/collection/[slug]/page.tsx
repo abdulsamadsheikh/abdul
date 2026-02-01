@@ -4,15 +4,16 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 
 interface CollectionPageProps {
-  params: {
+  params: Promise<{
     slug: string;
-  };
+  }>;
 }
 
 export const revalidate = 60;
 
 export default async function CollectionPage({ params }: CollectionPageProps) {
-  const collectionName = decodeURIComponent(params.slug);
+  const { slug } = await params;
+  const collectionName = decodeURIComponent(slug);
   const [images, collections] = await Promise.all([
     getImagesByCollection(collectionName),
     getCollections(),
@@ -20,8 +21,8 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
 
   const collection = collections.find(c => c.name === collectionName);
 
-  // Check if this is a valid collection (exists in collections or has images)
-  const isValidCollection = collection || images.length > 0;
+  // A collection is valid if it has images, regardless of whether it's in the collections list
+  const isValidCollection = images.length > 0;
   
   // Fun messages for invalid collections
   const getFunMessage = () => {
@@ -67,14 +68,8 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
       </header>
       
       <div className="pt-20 pb-8 px-1 sm:px-2">
-        {isValidCollection && images.length > 0 ? (
+        {images.length > 0 ? (
           <Gallery images={images} />
-        ) : isValidCollection ? (
-          <div className="flex items-center justify-center min-h-[50vh]">
-            <p className="text-white/40 text-sm tracking-wide">
-              No photos in this collection yet
-            </p>
-          </div>
         ) : (
           <div className="flex items-center justify-center min-h-[50vh] px-4">
             <div className="text-center max-w-md">
@@ -84,21 +79,12 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
               <p className="text-white/40 text-sm tracking-wide mb-6">
                 {getFunMessage()}
               </p>
-              <div className="space-y-2">
-                <Link
-                  href="/"
-                  className="inline-block text-white/60 hover:text-white text-sm transition-colors"
-                >
-                  ← Back to Gallery
-                </Link>
-                <br />
-                <Link
-                  href="/admin"
-                  className="inline-block text-white/40 hover:text-white/60 text-xs transition-colors"
-                >
-                  Create this collection →
-                </Link>
-              </div>
+              <Link
+                href="/"
+                className="inline-block text-white/60 hover:text-white text-sm transition-colors"
+              >
+                ← Back to Gallery
+              </Link>
             </div>
           </div>
         )}

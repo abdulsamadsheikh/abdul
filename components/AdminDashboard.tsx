@@ -1,11 +1,18 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import Image from "next/image";
+import { Upload, Plus, Check, X, Camera, Image as ImageIcon, Loader2 } from "lucide-react";
 import type { CloudinaryImage, Collection } from "@/lib/cloudinary";
 
 interface AdminDashboardProps {
   onLogout: () => void;
+}
+
+interface PreviewFile {
+  file: File;
+  preview: string;
+  id: string;
 }
 
 export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
@@ -18,6 +25,11 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [uploadedCount, setUploadedCount] = useState(0);
   const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [previewFiles, setPreviewFiles] = useState<PreviewFile[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (activeTab === "manage") {
@@ -50,6 +62,71 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const showNotification = (type: "success" | "error", message: string) => {
     setNotification({ type, message });
     setTimeout(() => setNotification(null), 3000);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    const newPreviews: PreviewFile[] = files.map((file) => ({
+      file,
+      preview: URL.createObjectURL(file),
+      id: Math.random().toString(36).substr(2, 9),
+    }));
+    setPreviewFiles((prev) => [...prev, ...newPreviews]);
+  };
+
+  const removePreview = (id: string) => {
+    setPreviewFiles((prev) => {
+      const file = prev.find((f) => f.id === id);
+      if (file) {
+        URL.revokeObjectURL(file.preview);
+      }
+      return prev.filter((f) => f.id !== id);
+    });
+  };
+
+  const handleUpload = async () => {
+    if (previewFiles.length === 0) return;
+
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    try {
+      const uploadPromises = previewFiles.map(async (previewFile) => {
+        const formData = new FormData();
+        formData.append("file", previewFile.file);
+
+        const response = await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Upload failed: ${response.statusText}`);
+        }
+
+        return response.json();
+      });
+
+      await Promise.all(uploadPromises);
+      
+      // Success
+      setUploadSuccess(true);
+      showNotification("success", `Uploaded ${previewFiles.length} photo${previewFiles.length !== 1 ? "s" : ""}`);
+      
+      // Clear previews
+      previewFiles.forEach((file) => URL.revokeObjectURL(file.preview));
+      setPreviewFiles([]);
+      
+      // Reset success state after delay
+      setTimeout(() => setUploadSuccess(false), 2000);
+      
+    } catch (error) {
+      console.error("Upload error:", error);
+      showNotification("error", "Upload failed. Please try again.");
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+    }
   };
 
   const openUploadWidget = () => {
@@ -291,18 +368,89 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
         {/* Upload Tab */}
         {activeTab === "upload" && (
-          <div className="p-8">
-            <div className="max-w-md mx-auto text-center">
-              <button
-                onClick={openUploadWidget}
-                className="w-full bg-white text-black px-8 py-4 text-sm font-medium rounded-lg hover:bg-white/90 transition-colors mb-6"
-              >
-                Select Photos
-              </button>
-              {uploadedCount > 0 && (
-                <p className="text-white/60 text-sm">
-                  {uploadedCount} photo{uploadedCount > 1 ? "s" : ""} uploaded
-                </p>
+          <div className="flex flex-col h-[calc(100vh-8rem)]">
+            {/* Upload Area */}
+            <div className="flex-1 p-6 relative">
+              {uploadSuccess && (
+                <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-10 rounded-2xl">
+                  <div className="text-center">
+                    <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <Check className="w-10 h-10 text-white" />
+                    </div>
+                    <p className="text-white text-sm font-medium">Upload Complete!</p>
+                  </div>
+                </div>
+              )}
+              
+              {previewFiles.length === 0 ? (
+                <div className="h-full flex items-center justify-center">
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full max-w-sm mx-auto border-2 border-dashed border-white/20 rounded-2xl p-12 text-center cursor-pointer hover:border-white/40 transition-colors group"
+                  >
+                    <div className="flex flex-col items-center space-y-4">
+                      <div className="w-16 h-16 bg-white/10 rounded-full flex items-center justify-center group-hover:bg-white/15 transition-colors">
+                        <Plus className="w-8 h-8 text-white/60" />
+                      </div>
+                      <div>
+                        <p className="text-white/80 text-sm font-medium mb-1">Add Photos</p>
+                        <p className="text-white/40 text-xs">Tap to select from your library</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Preview Grid */}
+                  <div className="grid grid-cols-2 gap-2 max-h-96 overflow-y-auto scrollbar-hide">
+                    {previewFiles.map((file) => (
+                      <div key={file.id} className="relative aspect-square rounded-lg overflow-hidden">
+                        <img
+                          src={file.preview}
+                          alt="Preview"
+                          className="w-full h-full object-cover"
+                        />
+                        <button
+                          onClick={() => removePreview(file.id)}
+                          className="absolute top-2 right-2 w-6 h-6 bg-black/60 rounded-full flex items-center justify-center text-white/80 hover:bg-black/80 transition-colors"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Add More Button */}
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full py-3 border border-white/20 rounded-xl text-white/60 text-sm hover:border-white/40 hover:text-white/80 transition-colors"
+                  >
+                    Add More Photos
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Fixed Upload Button */}
+            <div className="p-4 border-t border-white/10">
+              {previewFiles.length > 0 && (
+                <button
+                  onClick={handleUpload}
+                  disabled={isUploading}
+                  className="w-full bg-white text-black px-6 py-4 text-sm font-medium rounded-xl hover:bg-white/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                >
+                  {isUploading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Uploading...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4" />
+                      <span>Upload {previewFiles.length} Photo{previewFiles.length !== 1 ? "s" : ""}</span>
+                    </>
+                  )}
+                </button>
               )}
             </div>
           </div>
@@ -440,6 +588,17 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
           </div>
         )}
       </div>
+
+      {/* Hidden File Input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={handleFileSelect}
+      />
     </main>
   );
 }
