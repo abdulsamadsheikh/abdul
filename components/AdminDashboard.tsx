@@ -595,7 +595,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         type="file"
         multiple
         accept="image/*"
-        capture="environment"
         className="hidden"
         onChange={handleFileSelect}
       />
