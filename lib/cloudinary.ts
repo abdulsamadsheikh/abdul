@@ -19,6 +19,8 @@ export interface CloudinaryImage {
   blur_data_url?: string;
   folder?: string;
   context?: Record<string, string>;
+  etag?: string;
+  image_metadata?: Record<string, string>;
 }
 
 export interface Collection {
@@ -27,18 +29,26 @@ export interface Collection {
   cover_image?: string;
 }
 
-// Internal function to fetch images from Cloudinary
+// Internal function to fetch images from Cloudinary (paginated)
 async function fetchImages(folder: string): Promise<CloudinaryImage[]> {
-  const result = await cloudinary.search
-    .expression(`folder:${folder}`)
-    .sort_by("created_at", "desc")
-    .max_results(50)
-    .with_field("context")
-    .execute();
+  const allResources: any[] = [];
+  let nextCursor: string | undefined;
+
+  do {
+    const search = cloudinary.search
+      .expression(`folder:${folder}`)
+      .sort_by("created_at", "desc")
+      .with_field("context")
+      .max_results(500);
+    if (nextCursor) search.next_cursor(nextCursor);
+    const result = await search.execute();
+    allResources.push(...result.resources);
+    nextCursor = result.next_cursor;
+  } while (nextCursor);
 
   const blurDataURL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A8A";
 
-  return result.resources.map((resource: any) => {
+  return allResources.map((resource: any) => {
     const optimizedUrl = cloudinary.url(resource.public_id, {
       transformation: [
         { width: 800, crop: "limit" },
@@ -60,6 +70,7 @@ async function fetchImages(folder: string): Promise<CloudinaryImage[]> {
       blur_data_url: blurDataURL,
       folder: resource.folder,
       context: resource.context || {},
+      etag: resource.etag || "",
     };
   });
 }
@@ -83,14 +94,24 @@ export async function getImages(folder: string = "gallery"): Promise<CloudinaryI
   }
 }
 
-// Internal function to fetch images by collection
+// Internal function to fetch images by collection (paginated)
 async function fetchImagesByCollection(collection: string): Promise<CloudinaryImage[]> {
-  const result = await cloudinary.search
-    .expression(`folder:gallery`)
-    .with_field("context")
-    .sort_by("created_at", "desc")
-    .max_results(100)
-    .execute();
+  const allResources: any[] = [];
+  let nextCursor: string | undefined;
+
+  do {
+    const search = cloudinary.search
+      .expression(`folder:gallery`)
+      .with_field("context")
+      .sort_by("created_at", "desc")
+      .max_results(500);
+    if (nextCursor) search.next_cursor(nextCursor);
+    const result = await search.execute();
+    allResources.push(...result.resources);
+    nextCursor = result.next_cursor;
+  } while (nextCursor);
+
+  const result = { resources: allResources };
 
   const blurDataURL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A8A";
 
@@ -118,6 +139,7 @@ async function fetchImagesByCollection(collection: string): Promise<CloudinaryIm
         blur_data_url: blurDataURL,
         folder: resource.folder,
         context: resource.context || {},
+        etag: resource.etag || "",
       };
     });
 }
@@ -140,17 +162,25 @@ export async function getImagesByCollection(collection: string): Promise<Cloudin
   }
 }
 
-// Internal function to fetch collections
+// Internal function to fetch collections (paginated)
 async function fetchCollections(): Promise<Collection[]> {
-  const result = await cloudinary.search
-    .expression(`folder:gallery`)
-    .with_field("context")
-    .max_results(500)
-    .execute();
+  const allResources: any[] = [];
+  let nextCursor: string | undefined;
+
+  do {
+    const search = cloudinary.search
+      .expression(`folder:gallery`)
+      .with_field("context")
+      .max_results(500);
+    if (nextCursor) search.next_cursor(nextCursor);
+    const result = await search.execute();
+    allResources.push(...result.resources);
+    nextCursor = result.next_cursor;
+  } while (nextCursor);
 
   const collectionsMap = new Map<string, { count: number; latest: string }>();
   
-  result.resources.forEach((resource: any) => {
+  allResources.forEach((resource: any) => {
     const collection = resource.context?.collection;
     if (collection) {
       const existing = collectionsMap.get(collection) || { count: 0, latest: "" };
@@ -248,6 +278,7 @@ export async function getImageByPhotoId(photoId: string, folder: string = "galle
     const result = await cloudinary.api.resource(fullPublicId, {
       colors: false,
       faces: false,
+      image_metadata: true,
     });
 
     const blurDataURL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A8A";
@@ -271,6 +302,7 @@ export async function getImageByPhotoId(photoId: string, folder: string = "galle
       blur_data_url: blurDataURL,
       folder: result.folder,
       context: result.context || {},
+      image_metadata: result.image_metadata || {},
     };
   } catch (error) {
     console.error("Error fetching image by ID:", error);
@@ -280,13 +312,21 @@ export async function getImageByPhotoId(photoId: string, folder: string = "galle
 
 export async function getAllPhotoIds(folder: string = "gallery"): Promise<string[]> {
   try {
-    const result = await cloudinary.search
-      .expression(`folder:${folder}`)
-      .sort_by("created_at", "desc")
-      .max_results(500)
-      .execute();
+    const allResources: any[] = [];
+    let nextCursor: string | undefined;
 
-    return result.resources.map((resource: any) => getPhotoId(resource.public_id));
+    do {
+      const search = cloudinary.search
+        .expression(`folder:${folder}`)
+        .sort_by("created_at", "desc")
+        .max_results(500);
+      if (nextCursor) search.next_cursor(nextCursor);
+      const result = await search.execute();
+      allResources.push(...result.resources);
+      nextCursor = result.next_cursor;
+    } while (nextCursor);
+
+    return allResources.map((resource: any) => getPhotoId(resource.public_id));
   } catch (error) {
     console.error("Error fetching all photo IDs:", error);
     return [];
@@ -295,14 +335,22 @@ export async function getAllPhotoIds(folder: string = "gallery"): Promise<string
 
 export async function getPhotoIdsByCollection(collection: string): Promise<string[]> {
   try {
-    const result = await cloudinary.search
-      .expression(`folder:gallery`)
-      .with_field("context")
-      .sort_by("created_at", "desc")
-      .max_results(500)
-      .execute();
+    const allResources: any[] = [];
+    let nextCursor: string | undefined;
 
-    return result.resources
+    do {
+      const search = cloudinary.search
+        .expression(`folder:gallery`)
+        .with_field("context")
+        .sort_by("created_at", "desc")
+        .max_results(500);
+      if (nextCursor) search.next_cursor(nextCursor);
+      const result = await search.execute();
+      allResources.push(...result.resources);
+      nextCursor = result.next_cursor;
+    } while (nextCursor);
+
+    return allResources
       .filter((resource: any) => resource.context?.collection === collection)
       .map((resource: any) => getPhotoId(resource.public_id));
   } catch (error) {
@@ -341,6 +389,47 @@ export async function getAdjacentPhotos(
     console.error("Error fetching adjacent photos:", error);
     return { prev: null, next: null, total: 0, currentIndex: -1 };
   }
+}
+
+// Fetch all etags for duplicate detection
+export async function getAllEtags(folder: string = "gallery"): Promise<{ etag: string; public_id: string }[]> {
+  const allResources: any[] = [];
+  let nextCursor: string | undefined;
+
+  do {
+    const search = cloudinary.search
+      .expression(`folder:${folder}`)
+      .sort_by("created_at", "desc")
+      .max_results(500);
+    if (nextCursor) search.next_cursor(nextCursor);
+    const result = await search.execute();
+    allResources.push(...result.resources);
+    nextCursor = result.next_cursor;
+  } while (nextCursor);
+
+  return allResources.map((r: any) => ({ etag: r.etag, public_id: r.public_id }));
+}
+
+// Find duplicate images by etag
+export async function findDuplicates(folder: string = "gallery"): Promise<{ etag: string; public_ids: string[]; keep: string }[]> {
+  const all = await getAllEtags(folder);
+  const etagMap = new Map<string, string[]>();
+
+  for (const { etag, public_id } of all) {
+    if (!etag) continue;
+    const existing = etagMap.get(etag) || [];
+    existing.push(public_id);
+    etagMap.set(etag, existing);
+  }
+
+  const duplicates: { etag: string; public_ids: string[]; keep: string }[] = [];
+  for (const [etag, public_ids] of etagMap) {
+    if (public_ids.length > 1) {
+      duplicates.push({ etag, public_ids, keep: public_ids[0] });
+    }
+  }
+
+  return duplicates;
 }
 
 export default cloudinary;

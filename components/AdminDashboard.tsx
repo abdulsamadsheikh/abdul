@@ -29,6 +29,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [previewFiles, setPreviewFiles] = useState<PreviewFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [duplicateCount, setDuplicateCount] = useState(0);
+  const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -89,9 +91,14 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
     setIsUploading(true);
     setUploadProgress(0);
+    setDuplicateCount(0);
 
     try {
-      const uploadPromises = previewFiles.map(async (previewFile) => {
+      let uploaded = 0;
+      let duplicates = 0;
+
+      // Upload sequentially to get accurate progress and duplicate tracking
+      for (const previewFile of previewFiles) {
         const formData = new FormData();
         formData.append("file", previewFile.file);
 
@@ -100,32 +107,68 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
           body: formData,
         });
 
-        if (!response.ok) {
-          throw new Error(`Upload failed: ${response.statusText}`);
+        if (response.status === 409) {
+          duplicates++;
+        } else if (response.ok) {
+          uploaded++;
         }
 
-        return response.json();
-      });
+        setUploadProgress(Math.round(((uploaded + duplicates) / previewFiles.length) * 100));
+      }
 
-      await Promise.all(uploadPromises);
-      
+      setDuplicateCount(duplicates);
+
       // Success
       setUploadSuccess(true);
-      showNotification("success", `Uploaded ${previewFiles.length} photo${previewFiles.length !== 1 ? "s" : ""}`);
-      
+      if (duplicates > 0 && uploaded > 0) {
+        showNotification("success", `Uploaded ${uploaded}, skipped ${duplicates} duplicate${duplicates !== 1 ? "s" : ""}`);
+      } else if (duplicates > 0 && uploaded === 0) {
+        showNotification("error", `All ${duplicates} photo${duplicates !== 1 ? "s" : ""} already exist`);
+      } else {
+        showNotification("success", `Uploaded ${uploaded} photo${uploaded !== 1 ? "s" : ""}`);
+      }
+
       // Clear previews
       previewFiles.forEach((file) => URL.revokeObjectURL(file.preview));
       setPreviewFiles([]);
-      
+
       // Reset success state after delay
-      setTimeout(() => setUploadSuccess(false), 2000);
-      
+      setTimeout(() => {
+        setUploadSuccess(false);
+        setDuplicateCount(0);
+      }, 3000);
+
     } catch (error) {
       console.error("Upload error:", error);
       showNotification("error", "Upload failed. Please try again.");
     } finally {
       setIsUploading(false);
       setUploadProgress(0);
+    }
+  };
+
+  const cleanDuplicates = async () => {
+    setIsCleaningDuplicates(true);
+    try {
+      // First scan for duplicates
+      const scanRes = await fetch("/api/duplicates");
+      const scanData = await scanRes.json();
+
+      if (scanData.count === 0) {
+        showNotification("success", "No duplicates found");
+        return;
+      }
+
+      // Delete duplicates
+      const deleteRes = await fetch("/api/duplicates", { method: "DELETE" });
+      const deleteData = await deleteRes.json();
+
+      showNotification("success", deleteData.message);
+      fetchImages();
+    } catch (error) {
+      showNotification("error", "Failed to clean duplicates");
+    } finally {
+      setIsCleaningDuplicates(false);
     }
   };
 
@@ -374,10 +417,12 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
               {uploadSuccess && (
                 <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-10 rounded-2xl">
                   <div className="text-center">
-                    <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <div className={`w-20 h-20 ${duplicateCount > 0 && duplicateCount === previewFiles.length ? 'bg-yellow-500' : 'bg-green-500'} rounded-full flex items-center justify-center mx-auto mb-4`}>
                       <Check className="w-10 h-10 text-white" />
                     </div>
-                    <p className="text-white text-sm font-medium">Upload Complete!</p>
+                    <p className="text-white text-sm font-medium">
+                      {duplicateCount > 0 ? `Skipped ${duplicateCount} duplicate${duplicateCount !== 1 ? 's' : ''}` : 'Upload Complete!'}
+                    </p>
                   </div>
                 </div>
               )}
@@ -442,7 +487,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                   {isUploading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Uploading...</span>
+                      <span>Uploading{uploadProgress > 0 ? ` ${uploadProgress}%` : '...'}</span>
                     </>
                   ) : (
                     <>
@@ -459,6 +504,21 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         {/* Manage Tab */}
         {activeTab === "manage" && (
           <div className="p-4">
+            {/* Duplicate Cleanup */}
+            <div className="mb-4 flex items-center justify-end">
+              <button
+                onClick={cleanDuplicates}
+                disabled={isCleaningDuplicates}
+                className="text-white/60 text-xs hover:text-white/80 transition-colors flex items-center gap-2 disabled:opacity-50"
+              >
+                {isCleaningDuplicates ? (
+                  <><Loader2 className="w-3 h-3 animate-spin" /> Scanning...</>
+                ) : (
+                  'Clean Duplicates'
+                )}
+              </button>
+            </div>
+
             {/* Actions Bar */}
             {selectedImages.size > 0 && (
               <div className="mb-4 p-4 bg-white/5 rounded-lg flex items-center gap-4 flex-wrap">

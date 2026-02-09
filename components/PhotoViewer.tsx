@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useCallback, useState, useRef } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Info } from "lucide-react";
 import type { CloudinaryImage } from "@/lib/cloudinary";
 
 interface PhotoViewerProps {
@@ -31,6 +31,7 @@ export default function PhotoViewer({
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [touchEnd, setTouchEnd] = useState<{ x: number; y: number } | null>(null);
   const [isNavigating, setIsNavigating] = useState(false);
+  const [showMeta, setShowMeta] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Minimum swipe distance (in px)
@@ -54,7 +55,7 @@ export default function PhotoViewer({
     (id: string | null) => {
       if (id && !isNavigating) {
         setIsNavigating(true);
-        router.push(buildPhotoUrl(id));
+        router.replace(buildPhotoUrl(id));
         // Reset after navigation
         setTimeout(() => setIsNavigating(false), 300);
       }
@@ -62,15 +63,15 @@ export default function PhotoViewer({
     [router, isNavigating, collection]
   );
 
-  // Direct navigation to gallery/collection (for X button and taps)
+  // Exit viewer — always goes straight back to gallery/collection
   const exitViewer = useCallback(() => {
     router.push(backUrl);
   }, [router, backUrl]);
 
-  // Browser back (for Escape key - preserves scroll)
-  const goBack = useCallback(() => {
-    router.back();
-  }, [router]);
+  // Reset metadata panel on photo change
+  useEffect(() => {
+    setShowMeta(false);
+  }, [image.public_id]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -86,14 +87,14 @@ export default function PhotoViewer({
           break;
         case "Escape":
           e.preventDefault();
-          goBack();
+          exitViewer();
           break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [navigateTo, goBack, nextId, prevId]);
+  }, [navigateTo, exitViewer, nextId, prevId]);
 
   // Touch handlers for swipe and tap
   const onTouchStart = (e: React.TouchEvent) => {
@@ -117,8 +118,9 @@ export default function PhotoViewer({
     if (target.tagName === 'BUTTON' || target.closest('button')) return true;
     // Check if it's the image or image container
     if (target.tagName === 'IMG' || target.closest('[data-image-container]')) return true;
-    // Check if it's the date/counter footer
+    // Check if it's the date/counter footer or metadata
     if (target.closest('[data-footer]')) return true;
+    if (target.closest('[data-meta]')) return true;
     return false;
   };
 
@@ -170,6 +172,18 @@ export default function PhotoViewer({
       year: "numeric",
     });
   };
+
+  // Parse EXIF metadata
+  const meta = image.image_metadata || {};
+  const camera = meta.Make && meta.Model
+    ? `${meta.Make} ${meta.Model}`.replace(/\s+/g, ' ').trim()
+    : meta.Model || null;
+  const lens = meta.LensModel || meta.Lens || null;
+  const focalLength = meta.FocalLength || meta.FocalLengthIn35mmFormat || null;
+  const aperture = meta.FNumber || meta.ApertureValue || null;
+  const shutter = meta.ExposureTime || meta.ShutterSpeedValue || null;
+  const iso = meta.ISO || meta.ISOSpeedRatings || null;
+  const hasMetadata = camera || lens || focalLength || aperture || shutter || iso;
 
   // Handle click on background (desktop)
   const handleBackgroundClick = (e: React.MouseEvent) => {
@@ -272,13 +286,44 @@ export default function PhotoViewer({
         />
       </div>
 
+      {/* Metadata panel */}
+      {showMeta && hasMetadata && (
+        <div
+          data-meta
+          className="absolute bottom-14 left-0 right-0 z-30 flex justify-center pointer-events-none"
+        >
+          <div className="bg-black/60 backdrop-blur-sm rounded-lg px-5 py-3 max-w-sm pointer-events-auto">
+            <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-white/50 text-[11px] tracking-wide">
+              {camera && <span>{camera}</span>}
+              {lens && <span>{lens}</span>}
+              {focalLength && <span>{focalLength}{typeof focalLength === 'string' && !focalLength.includes('mm') ? 'mm' : ''}</span>}
+              {aperture && <span>f/{aperture}</span>}
+              {shutter && <span>{shutter}s</span>}
+              {iso && <span>ISO {iso}</span>}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Date and counter at bottom */}
-      <div data-footer className="absolute bottom-4 left-0 right-0 flex justify-center items-center gap-4 text-white/30 text-xs tracking-wide pointer-events-none">
+      <div data-footer className="absolute bottom-4 left-0 right-0 flex justify-center items-center gap-4 text-white/30 text-xs tracking-wide pointer-events-none z-30">
         <span>{formatDate(image.created_at)}</span>
         <span>·</span>
         <span>
           {currentIndex + 1} / {total}
         </span>
+        {hasMetadata && (
+          <>
+            <span>·</span>
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowMeta(!showMeta); }}
+              className="pointer-events-auto text-white/30 hover:text-white/60 transition-colors"
+              aria-label="Toggle metadata"
+            >
+              <Info className="w-3.5 h-3.5" />
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
