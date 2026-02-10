@@ -21,6 +21,9 @@ export interface CloudinaryImage {
   context?: Record<string, string>;
   etag?: string;
   image_metadata?: Record<string, string>;
+  bytes?: number;
+  original_width?: number;
+  original_height?: number;
 }
 
 export interface Collection {
@@ -273,8 +276,8 @@ export function getOptimizedUrl(publicId: string, width: number): string {
 export { getPhotoId, getFullPublicId } from "./utils";
 
 export async function getImageByPhotoId(photoId: string, folder: string = "gallery"): Promise<CloudinaryImage | null> {
+  const fullPublicId = getFullPublicId(photoId, folder);
   try {
-    const fullPublicId = getFullPublicId(photoId, folder);
     const result = await cloudinary.api.resource(fullPublicId, {
       colors: false,
       faces: false,
@@ -303,9 +306,25 @@ export async function getImageByPhotoId(photoId: string, folder: string = "galle
       folder: result.folder,
       context: result.context || {},
       image_metadata: result.image_metadata || {},
+      bytes: result.bytes,
+      original_width: result.width,
+      original_height: result.height,
     };
   } catch (error) {
-    console.error("Error fetching image by ID:", error);
+    // Only log unexpected errors, not 404s which are handled by notFound()
+    const is404 = error && typeof error === 'object' && 'error' in error && 
+                 error.error && typeof error.error === 'object' && 
+                 'http_code' in error.error && error.error.http_code === 404;
+    
+    if (!is404) {
+      console.error("Error fetching image by ID:", {
+        error,
+        photoId,
+        fullPublicId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : undefined,
+      });
+    }
     return null;
   }
 }

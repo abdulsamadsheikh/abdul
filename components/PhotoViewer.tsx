@@ -46,11 +46,6 @@ export default function PhotoViewer({
       : `/photo/${id}`;
   };
 
-  // Back URL - collection page or main gallery
-  const backUrl = collection 
-    ? `/collection/${encodeURIComponent(collection)}`
-    : "/";
-
   const navigateTo = useCallback(
     (id: string | null) => {
       if (id && !isNavigating) {
@@ -63,10 +58,10 @@ export default function PhotoViewer({
     [router, isNavigating, collection]
   );
 
-  // Exit viewer — always goes straight back to gallery/collection
+  // Exit viewer — back() preserves scroll position since photo nav uses replace()
   const exitViewer = useCallback(() => {
-    router.push(backUrl);
-  }, [router, backUrl]);
+    router.back();
+  }, [router]);
 
   // Reset metadata panel on photo change
   useEffect(() => {
@@ -173,7 +168,7 @@ export default function PhotoViewer({
     });
   };
 
-  // Parse EXIF metadata
+  // Parse metadata — show what's available for every photo
   const meta = image.image_metadata || {};
   const camera = meta.Make && meta.Model
     ? `${meta.Make} ${meta.Model}`.replace(/\s+/g, ' ').trim()
@@ -183,7 +178,22 @@ export default function PhotoViewer({
   const aperture = meta.FNumber || meta.ApertureValue || null;
   const shutter = meta.ExposureTime || meta.ShutterSpeedValue || null;
   const iso = meta.ISO || meta.ISOSpeedRatings || null;
-  const hasMetadata = camera || lens || focalLength || aperture || shutter || iso;
+  const colorProfile = meta.ProfileDescription || null;
+
+  // Format file size
+  const formatBytes = (bytes?: number) => {
+    if (!bytes) return null;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const dimensions = image.original_width && image.original_height
+    ? `${image.original_width} × ${image.original_height}`
+    : null;
+  const fileSize = formatBytes(image.bytes);
+  const formatLabel = image.format?.toUpperCase() || null;
+  const hasExif = !!(camera || lens || focalLength || aperture || shutter || iso);
+  const hasMetadata = true;
 
   // Handle click on background (desktop)
   const handleBackgroundClick = (e: React.MouseEvent) => {
@@ -287,19 +297,29 @@ export default function PhotoViewer({
       </div>
 
       {/* Metadata panel */}
-      {showMeta && hasMetadata && (
+      {showMeta && (
         <div
           data-meta
           className="absolute bottom-14 left-0 right-0 z-30 flex justify-center pointer-events-none"
         >
-          <div className="bg-black/60 backdrop-blur-sm rounded-lg px-5 py-3 max-w-sm pointer-events-auto">
-            <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-white/50 text-[11px] tracking-wide">
-              {camera && <span>{camera}</span>}
-              {lens && <span>{lens}</span>}
-              {focalLength && <span>{focalLength}{typeof focalLength === 'string' && !focalLength.includes('mm') ? 'mm' : ''}</span>}
-              {aperture && <span>f/{aperture}</span>}
-              {shutter && <span>{shutter}s</span>}
-              {iso && <span>ISO {iso}</span>}
+          <div className="bg-black/60 backdrop-blur-sm rounded-lg px-5 py-3 max-w-md pointer-events-auto">
+            <div className="flex flex-col items-center gap-2">
+              {hasExif && (
+                <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-white/50 text-[11px] tracking-wide">
+                  {camera && <span>{camera}</span>}
+                  {lens && <span>{lens}</span>}
+                  {focalLength && <span>{focalLength}{typeof focalLength === 'string' && !focalLength.includes('mm') ? 'mm' : ''}</span>}
+                  {aperture && <span>f/{aperture}</span>}
+                  {shutter && <span>{shutter}s</span>}
+                  {iso && <span>ISO {iso}</span>}
+                </div>
+              )}
+              <div className="flex flex-wrap items-center justify-center gap-x-3 text-white/30 text-[10px] tracking-wider">
+                {dimensions && <span>{dimensions}</span>}
+                {formatLabel && <span>{formatLabel}</span>}
+                {fileSize && <span>{fileSize}</span>}
+                {colorProfile && <span>{colorProfile}</span>}
+              </div>
             </div>
           </div>
         </div>
