@@ -122,6 +122,13 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const handleUpload = async () => {
     if (previewFiles.length === 0) return;
 
+    const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+    const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+    if (!cloudName || !uploadPreset) {
+      showNotification("error", "Cloudinary env vars missing");
+      return;
+    }
+
     setIsUploading(true);
     setUploadProgress(0);
     setDuplicateCount(0);
@@ -129,21 +136,22 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     setUploadErrors([]);
 
     let uploaded = 0;
-    let duplicates = 0;
     let failed = 0;
     const errors: { name: string; reason: string }[] = [];
-    // Hold a snapshot — state may change during async work
     const filesToUpload = previewFiles;
 
+    // Direct browser → Cloudinary upload avoids server function body limits
+    // (Netlify/Vercel cap at ~4–6 MB) and is faster for large camera photos.
+    const endpoint = `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`;
+
     for (const previewFile of filesToUpload) {
-      const formData = new FormData();
-      formData.append("file", previewFile.file);
+      const fd = new FormData();
+      fd.append("file", previewFile.file);
+      fd.append("upload_preset", uploadPreset);
+      fd.append("folder", "gallery");
 
       try {
-        const response = await fetch("/api/upload", {
-          method: "POST",
-          body: formData,
-        });
+        const response = await fetch(endpoint, { method: "POST", body: fd });
 
         let payload: any = null;
         try {
@@ -152,15 +160,16 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
           payload = null;
         }
 
-        if (response.ok) {
+        if (response.ok && payload?.public_id) {
           uploaded++;
-        } else if (response.status === 409) {
-          duplicates++;
         } else {
           failed++;
           errors.push({
             name: previewFile.file.name,
-            reason: payload?.message || `HTTP ${response.status}`,
+            reason:
+              payload?.error?.message ||
+              payload?.message ||
+              `HTTP ${response.status}`,
           });
         }
       } catch (err: any) {
@@ -172,36 +181,45 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       }
 
       setUploadProgress(
-        Math.round(((uploaded + duplicates + failed) / filesToUpload.length) * 100)
+        Math.round(((uploaded + failed) / filesToUpload.length) * 100)
       );
     }
 
-    setDuplicateCount(duplicates);
+    // Tell server to invalidate the gallery cache so new photos appear
+    if (uploaded > 0) {
+      try {
+        await fetch("/api/revalidate", { method: "POST" });
+      } catch {
+        // non-fatal — cache will refresh on its own within 1h
+      }
+    }
+
     setFailedCount(failed);
     setUploadErrors(errors);
     setUploadSuccess(true);
 
-    // Build summary message
     const parts: string[] = [];
     if (uploaded) parts.push(`Uploaded ${uploaded}`);
-    if (duplicates) parts.push(`skipped ${duplicates} duplicate${duplicates !== 1 ? "s" : ""}`);
     if (failed) parts.push(`${failed} failed`);
     const summary = parts.join(", ") || "Nothing uploaded";
-    showNotification(failed > 0 || (uploaded === 0 && duplicates === 0) ? "error" : "success", summary);
+    showNotification(
+      failed > 0 || uploaded === 0 ? "error" : "success",
+      summary
+    );
 
-    // Clear previews
     filesToUpload.forEach((file) => URL.revokeObjectURL(file.preview));
     setPreviewFiles([]);
 
     setIsUploading(false);
     setUploadProgress(0);
 
-    // Hide success overlay after a moment, but keep error details visible
-    setTimeout(() => {
-      setUploadSuccess(false);
-      setDuplicateCount(0);
-      // Keep errors visible until user dismisses
-    }, failed > 0 ? 6000 : 2500);
+    setTimeout(
+      () => {
+        setUploadSuccess(false);
+        setDuplicateCount(0);
+      },
+      failed > 0 ? 6000 : 2500
+    );
   };
 
   const cleanDuplicates = async () => {

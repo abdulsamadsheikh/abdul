@@ -321,30 +321,36 @@ export default function PhotoViewer({
         </button>
       )}
 
-      {/* Swipe-animated image */}
+      {/* Swipe-animated image. Container has the image's aspect ratio and
+          grows to fill 90vw × 85vh — `object-contain` then scales the image
+          (up *or* down) to fit, so small originals no longer appear tiny. */}
       <div
         data-interactive
-        className="relative z-20 flex items-center justify-center p-4 sm:p-8 md:p-12 will-change-transform"
+        className="relative z-20 flex items-center justify-center w-full h-full p-4 sm:p-8 md:p-12 will-change-transform pointer-events-none"
         style={{
           transform: `translate3d(${dragX}px, 0, 0)`,
           transition: isAnimating ? "transform 180ms cubic-bezier(0.4, 0, 0.2, 1)" : "none",
         }}
-        onClick={(e) => e.stopPropagation()}
       >
-        <Image
-          src={image.secure_url}
-          alt=""
-          width={image.width}
-          height={image.height}
-          className={`max-h-[85vh] max-w-full w-auto h-auto object-contain pointer-events-none transition-opacity duration-200 ${
-            isImageLoaded ? "opacity-100" : "opacity-0"
-          }`}
-          priority
-          placeholder="empty"
-          style={{ imageOrientation: "from-image" }}
-          draggable={false}
-          onLoad={() => setIsImageLoaded(true)}
-        />
+        <div
+          className="relative max-w-[90vw] max-h-[85vh] w-full h-full"
+          style={{ aspectRatio: `${image.width} / ${image.height}` }}
+        >
+          <Image
+            src={image.secure_url}
+            alt=""
+            fill
+            sizes="90vw"
+            className={`object-contain transition-opacity duration-200 ${
+              isImageLoaded ? "opacity-100" : "opacity-0"
+            }`}
+            priority
+            placeholder="empty"
+            style={{ imageOrientation: "from-image" }}
+            draggable={false}
+            onLoad={() => setIsImageLoaded(true)}
+          />
+        </div>
       </div>
 
       {/* Metadata panel */}
