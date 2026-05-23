@@ -3,8 +3,10 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useCallback, useState, useRef } from "react";
-import { ChevronLeft, ChevronRight, Info } from "lucide-react";
+import { ChevronLeft, ChevronRight, Info, X as XIcon } from "lucide-react";
 import type { CloudinaryImage } from "@/lib/cloudinary";
+import { getPhotoId } from "@/lib/utils";
+import LogoSpinner from "@/components/LogoSpinner";
 
 interface PhotoViewerProps {
   image: CloudinaryImage;
@@ -17,6 +19,9 @@ interface PhotoViewerProps {
   collection?: string;
 }
 
+const SWIPE_THRESHOLD = 60; // px to trigger photo change
+const TAP_THRESHOLD = 8; // px tolerance for tap detection
+
 export default function PhotoViewer({
   image,
   prevId,
@@ -28,151 +33,205 @@ export default function PhotoViewer({
   collection,
 }: PhotoViewerProps) {
   const router = useRouter();
-  const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
-  const [touchEnd, setTouchEnd] = useState<{ x: number; y: number } | null>(null);
-  const [isNavigating, setIsNavigating] = useState(false);
   const [showMeta, setShowMeta] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [dragX, setDragX] = useState(0);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [isImageLoaded, setIsImageLoaded] = useState(false);
+  const [showSpinner, setShowSpinner] = useState(false);
+  const navigatingRef = useRef(false);
+  const startRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  const lastMoveRef = useRef<{ x: number; y: number } | null>(null);
+  const directionRef = useRef<"h" | "v" | null>(null);
+  const widthRef = useRef(0);
 
-  // Minimum swipe distance (in px)
-  const minSwipeDistance = 50;
-  // Maximum distance for a tap (not a swipe)
-  const maxTapDistance = 10;
-
-  // Build URL with optional collection query param
-  const buildPhotoUrl = (id: string) => {
-    return collection 
-      ? `/photo/${id}?collection=${encodeURIComponent(collection)}`
-      : `/photo/${id}`;
-  };
+  const buildPhotoUrl = useCallback(
+    (id: string) =>
+      collection
+        ? `/photo/${id}?collection=${encodeURIComponent(collection)}`
+        : `/photo/${id}`,
+    [collection]
+  );
 
   const navigateTo = useCallback(
     (id: string | null) => {
-      if (id && !isNavigating) {
-        setIsNavigating(true);
-        router.replace(buildPhotoUrl(id));
-        // Reset after navigation
-        setTimeout(() => setIsNavigating(false), 300);
-      }
+      if (!id || navigatingRef.current) return;
+      navigatingRef.current = true;
+      router.replace(buildPhotoUrl(id), { scroll: false });
     },
-    [router, isNavigating, collection]
+    [router, buildPhotoUrl]
   );
 
-  // Exit viewer — back() preserves scroll position since photo nav uses replace()
-  const exitViewer = useCallback(() => {
-    router.back();
-  }, [router]);
-
-  // Reset metadata panel on photo change
+  // Lock body scroll + disable pull-to-refresh while the viewer is mounted
   useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const prevOverflow = body.style.overflow;
+    const prevOverscroll = html.style.overscrollBehavior;
+    body.style.overflow = "hidden";
+    html.style.overscrollBehavior = "none";
+    return () => {
+      body.style.overflow = prevOverflow;
+      html.style.overscrollBehavior = prevOverscroll;
+    };
+  }, []);
+
+  // When image changes, release the navigating lock and reset drag
+  useEffect(() => {
+    navigatingRef.current = false;
     setShowMeta(false);
-  }, [image.public_id]);
+    setDragX(0);
+    setIsAnimating(false);
+    setIsImageLoaded(false);
+    setShowSpinner(false);
+
+    // Remember which photo is on-screen so the gallery can land on it when we close
+    const galleryPath = collection
+      ? `/collection/${encodeURIComponent(collection)}`
+      : "/";
+    sessionStorage.setItem(`lastPhoto:${galleryPath}`, getPhotoId(image.public_id));
+  }, [image.public_id, collection]);
+
+  // Only show the spinner if loading takes more than 250ms — otherwise a quick
+  // (cached/prefetched) load just flashes and looks worse than no spinner.
+  useEffect(() => {
+    if (isImageLoaded) return;
+    const t = setTimeout(() => setShowSpinner(true), 250);
+    return () => clearTimeout(t);
+  }, [image.public_id, isImageLoaded]);
+
+  // Always exit to the gallery this photo belongs to, regardless of how the
+  // user arrived. router.back() walks history blindly and would land on
+  // /admin (or anywhere else) if that's where the user came from.
+  const exitViewer = useCallback(() => {
+    const galleryPath = collection
+      ? `/collection/${encodeURIComponent(collection)}`
+      : "/";
+    router.replace(galleryPath, { scroll: false });
+  }, [router, collection]);
 
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case "ArrowRight":
-          e.preventDefault();
-          navigateTo(nextId);
-          break;
-        case "ArrowLeft":
-          e.preventDefault();
-          navigateTo(prevId);
-          break;
-        case "Escape":
-          e.preventDefault();
-          exitViewer();
-          break;
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        navigateTo(nextId);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        navigateTo(prevId);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        exitViewer();
+      } else if (e.key === "i" || e.key === "I") {
+        setShowMeta((v) => !v);
       }
     };
-
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [navigateTo, exitViewer, nextId, prevId]);
 
-  // Touch handlers for swipe and tap
+  // Touch handlers
   const onTouchStart = (e: React.TouchEvent) => {
-    setTouchEnd(null);
-    setTouchStart({
-      x: e.targetTouches[0].clientX,
-      y: e.targetTouches[0].clientY,
-    });
+    if (e.touches.length !== 1) {
+      startRef.current = null;
+      return;
+    }
+    widthRef.current = window.innerWidth;
+    const t = e.touches[0];
+    startRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
+    lastMoveRef.current = { x: t.clientX, y: t.clientY };
+    directionRef.current = null;
+    setIsAnimating(false);
   };
 
   const onTouchMove = (e: React.TouchEvent) => {
-    setTouchEnd({
-      x: e.targetTouches[0].clientX,
-      y: e.targetTouches[0].clientY,
-    });
-  };
+    if (!startRef.current) return;
+    const t = e.touches[0];
+    const dx = t.clientX - startRef.current.x;
+    const dy = t.clientY - startRef.current.y;
+    lastMoveRef.current = { x: t.clientX, y: t.clientY };
 
-  // Check if element is part of interactive UI (buttons, image)
-  const isInteractiveElement = (target: HTMLElement): boolean => {
-    // Check if it's a button or inside a button
-    if (target.tagName === 'BUTTON' || target.closest('button')) return true;
-    // Check if it's the image or image container
-    if (target.tagName === 'IMG' || target.closest('[data-image-container]')) return true;
-    // Check if it's the date/counter footer or metadata
-    if (target.closest('[data-footer]')) return true;
-    if (target.closest('[data-meta]')) return true;
-    return false;
+    // Lock direction after first meaningful move
+    if (!directionRef.current) {
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
+        directionRef.current = Math.abs(dx) > Math.abs(dy) ? "h" : "v";
+      } else {
+        return;
+      }
+    }
+
+    if (directionRef.current === "h") {
+      // Resist when there's no neighbor
+      let next = dx;
+      if (dx > 0 && !prevId) next = dx * 0.25;
+      if (dx < 0 && !nextId) next = dx * 0.25;
+      setDragX(next);
+    }
   };
 
   const onTouchEnd = (e: React.TouchEvent) => {
-    if (!touchStart) return;
+    const start = startRef.current;
+    const last = lastMoveRef.current;
+    startRef.current = null;
+    if (!start) return;
 
-    const target = e.target as HTMLElement;
+    const dx = (last?.x ?? start.x) - start.x;
+    const dy = (last?.y ?? start.y) - start.y;
+    const elapsed = Date.now() - start.t;
+    const totalMove = Math.hypot(dx, dy);
 
-    // If no movement, treat as tap
-    if (!touchEnd) {
-      // Tap on non-interactive area = exit
-      if (!isInteractiveElement(target)) {
-        exitViewer();
-      }
+    // Tap → exit (only on background, not on interactive elements)
+    if (totalMove < TAP_THRESHOLD && elapsed < 400) {
+      const target = e.target as HTMLElement;
+      if (!isInteractive(target)) exitViewer();
       return;
     }
 
-    const distanceX = touchStart.x - touchEnd.x;
-    const distanceY = Math.abs(touchStart.y - touchEnd.y);
-    const totalDistance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
+    // Swipe gesture
+    if (directionRef.current === "h") {
+      const velocity = Math.abs(dx) / Math.max(elapsed, 1); // px/ms
+      const triggered =
+        Math.abs(dx) > SWIPE_THRESHOLD || velocity > 0.5;
 
-    // If very small movement, treat as tap
-    if (totalDistance < maxTapDistance) {
-      if (!isInteractiveElement(target)) {
-        exitViewer();
-      }
-      return;
-    }
-
-    // Only horizontal swipes (not vertical scrolling)
-    if (distanceY < Math.abs(distanceX)) {
-      const isLeftSwipe = distanceX > minSwipeDistance;
-      const isRightSwipe = distanceX < -minSwipeDistance;
-
-      if (isLeftSwipe) {
-        navigateTo(nextId);
-      } else if (isRightSwipe) {
-        navigateTo(prevId);
+      if (triggered && dx < 0 && nextId) {
+        // animate off-screen left then navigate
+        setIsAnimating(true);
+        setDragX(-widthRef.current);
+        setTimeout(() => navigateTo(nextId), 180);
+      } else if (triggered && dx > 0 && prevId) {
+        setIsAnimating(true);
+        setDragX(widthRef.current);
+        setTimeout(() => navigateTo(prevId), 180);
+      } else {
+        // snap back
+        setIsAnimating(true);
+        setDragX(0);
       }
     }
   };
 
-  // Format date
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  };
-
-  // Parse metadata — show what's available for every photo
+  // EXIF helpers
   const meta = image.image_metadata || {};
-  const camera = meta.Make && meta.Model
-    ? `${meta.Make} ${meta.Model}`.replace(/\s+/g, ' ').trim()
-    : meta.Model || null;
+
+  // Resolve the most accurate timestamp:
+  //   1. EXIF DateTimeOriginal (+ SubSecTimeOriginal for ms) — when taken
+  //   2. EXIF DateTime / CreateDate — fallback EXIF fields
+  //   3. image.created_at — upload time
+  // Display-only — does not affect gallery sort (which uses upload time).
+  const taken = resolveDate(meta, image.created_at);
+
+  const formattedTaken = formatTakenDate(taken.date, taken.hasTime, taken.hasSubsec);
+
+  // Hijri formatting differs slightly between Node ICU and browser ICU
+  // (e.g. "٧ شعبان، ١٤٤٧" vs "٧ شعبان ١٤٤٧"), which causes a hydration mismatch.
+  // Compute it only on the client.
+  const [hijriDate, setHijriDate] = useState<string>("");
+  useEffect(() => {
+    setHijriDate(formatHijri(taken.date));
+  }, [taken.date]);
+  const camera =
+    meta.Make && meta.Model
+      ? `${meta.Make} ${meta.Model}`.replace(/\s+/g, " ").trim()
+      : meta.Model || null;
   const lens = meta.LensModel || meta.Lens || null;
   const focalLength = meta.FocalLength || meta.FocalLengthIn35mmFormat || null;
   const aperture = meta.FNumber || meta.ApertureValue || null;
@@ -180,141 +239,138 @@ export default function PhotoViewer({
   const iso = meta.ISO || meta.ISOSpeedRatings || null;
   const colorProfile = meta.ProfileDescription || null;
 
-  // Format file size
   const formatBytes = (bytes?: number) => {
     if (!bytes) return null;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  const dimensions = image.original_width && image.original_height
-    ? `${image.original_width} × ${image.original_height}`
-    : null;
+  const dimensions =
+    image.original_width && image.original_height
+      ? `${image.original_width} × ${image.original_height}`
+      : null;
   const fileSize = formatBytes(image.bytes);
   const formatLabel = image.format?.toUpperCase() || null;
   const hasExif = !!(camera || lens || focalLength || aperture || shutter || iso);
-  const hasMetadata = true;
-
-  // Handle click on background (desktop)
-  const handleBackgroundClick = (e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (!isInteractiveElement(target)) {
-      exitViewer();
-    }
-  };
 
   return (
     <div
-      ref={containerRef}
-      className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center select-none cursor-pointer"
+      className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center select-none overflow-hidden"
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
-      onClick={handleBackgroundClick}
+      onClick={(e) => {
+        const target = e.target as HTMLElement;
+        if (!isInteractive(target)) exitViewer();
+      }}
+      style={{
+        touchAction: "none",
+        overscrollBehavior: "none",
+        WebkitTapHighlightColor: "transparent",
+      }}
     >
-      {/* Prefetch next/prev images */}
-      {prevImageUrl && (
-        <link rel="prefetch" href={prevImageUrl} as="image" />
-      )}
-      {nextImageUrl && (
-        <link rel="prefetch" href={nextImageUrl} as="image" />
+      {/* Preload neighbors */}
+      {prevImageUrl && <link rel="preload" as="image" href={prevImageUrl} />}
+      {nextImageUrl && <link rel="preload" as="image" href={nextImageUrl} />}
+
+      {/* Loading spinner — only after 250ms grace period to avoid flashing on quick loads */}
+      {!isImageLoaded && showSpinner && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+          <LogoSpinner size={56} />
+        </div>
       )}
 
       {/* Close button */}
       <button
-        onClick={exitViewer}
-        className="absolute top-4 right-4 z-50 text-white/40 hover:text-white/80 transition-colors p-2 cursor-pointer"
-        aria-label="Close"
-      >
-        <svg
-          width="24"
-          height="24"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
-
-      {/* Navigation arrows */}
-      {prevId && (
-        <button
-          onClick={() => navigateTo(prevId)}
-          className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-50 text-white/20 hover:text-white/60 transition-colors p-2 sm:p-3"
-          aria-label="Previous photo"
-        >
-          <ChevronLeft className="w-8 h-8 sm:w-10 sm:h-10" strokeWidth={1} />
-        </button>
-      )}
-
-      {nextId && (
-        <button
-          onClick={() => navigateTo(nextId)}
-          className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-50 text-white/20 hover:text-white/60 transition-colors p-2 sm:p-3"
-          aria-label="Next photo"
-        >
-          <ChevronRight className="w-8 h-8 sm:w-10 sm:h-10" strokeWidth={1} />
-        </button>
-      )}
-
-      {/* Tap/click background overlay - captures taps outside the image */}
-      <div 
-        className="absolute inset-0 z-10"
-        onClick={exitViewer}
-        onTouchEnd={(e) => {
-          // Prevent if there was significant movement (swipe)
-          if (touchEnd && touchStart) {
-            const dist = Math.abs(touchStart.x - touchEnd.x) + Math.abs(touchStart.y - touchEnd.y);
-            if (dist > maxTapDistance) return;
-          }
+        data-interactive
+        onClick={(e) => {
+          e.stopPropagation();
           exitViewer();
         }}
-      />
+        className="absolute top-4 right-4 z-50 text-white/50 hover:text-white p-2 transition-colors"
+        aria-label="Close"
+      >
+        <XIcon className="w-6 h-6" strokeWidth={1.5} />
+      </button>
 
-      {/* Main image container - z-20 to be above tap overlay */}
-      <div 
-        data-image-container
-        className="relative z-20 flex items-center justify-center p-4 sm:p-8 md:p-12"
+      {/* Desktop nav arrows */}
+      {prevId && (
+        <button
+          data-interactive
+          onClick={(e) => {
+            e.stopPropagation();
+            navigateTo(prevId);
+          }}
+          className="hidden sm:flex absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-40 text-white/30 hover:text-white/80 p-3 transition-colors"
+          aria-label="Previous photo"
+        >
+          <ChevronLeft className="w-10 h-10" strokeWidth={1} />
+        </button>
+      )}
+      {nextId && (
+        <button
+          data-interactive
+          onClick={(e) => {
+            e.stopPropagation();
+            navigateTo(nextId);
+          }}
+          className="hidden sm:flex absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-40 text-white/30 hover:text-white/80 p-3 transition-colors"
+          aria-label="Next photo"
+        >
+          <ChevronRight className="w-10 h-10" strokeWidth={1} />
+        </button>
+      )}
+
+      {/* Swipe-animated image */}
+      <div
+        data-interactive
+        className="relative z-20 flex items-center justify-center p-4 sm:p-8 md:p-12 will-change-transform"
+        style={{
+          transform: `translate3d(${dragX}px, 0, 0)`,
+          transition: isAnimating ? "transform 180ms cubic-bezier(0.4, 0, 0.2, 1)" : "none",
+        }}
         onClick={(e) => e.stopPropagation()}
-        onTouchEnd={(e) => e.stopPropagation()}
       >
         <Image
           src={image.secure_url}
           alt=""
           width={image.width}
           height={image.height}
-          className="max-h-[85vh] max-w-full w-auto h-auto object-contain"
+          className={`max-h-[85vh] max-w-full w-auto h-auto object-contain pointer-events-none transition-opacity duration-200 ${
+            isImageLoaded ? "opacity-100" : "opacity-0"
+          }`}
           priority
+          placeholder="empty"
           style={{ imageOrientation: "from-image" }}
-          placeholder={image.blur_data_url ? "blur" : "empty"}
-          blurDataURL={image.blur_data_url}
+          draggable={false}
+          onLoad={() => setIsImageLoaded(true)}
         />
       </div>
 
       {/* Metadata panel */}
       {showMeta && (
         <div
-          data-meta
-          className="absolute bottom-14 left-0 right-0 z-30 flex justify-center pointer-events-none"
+          data-interactive
+          className="absolute bottom-14 left-0 right-0 z-30 flex justify-center pointer-events-none sm:hidden"
         >
-          <div className="bg-black/60 backdrop-blur-sm rounded-lg px-5 py-3 max-w-md pointer-events-auto">
+          <div className="bg-black/70 backdrop-blur-sm rounded-lg px-5 py-3 max-w-md pointer-events-auto mx-4">
             <div className="flex flex-col items-center gap-2">
               {hasExif && (
-                <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-white/50 text-[11px] tracking-wide">
+                <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-white/60 text-[11px] tracking-wide">
                   {camera && <span>{camera}</span>}
                   {lens && <span>{lens}</span>}
-                  {focalLength && <span>{focalLength}{typeof focalLength === 'string' && !focalLength.includes('mm') ? 'mm' : ''}</span>}
+                  {focalLength && (
+                    <span>
+                      {focalLength}
+                      {typeof focalLength === "string" && !focalLength.includes("mm") ? "mm" : ""}
+                    </span>
+                  )}
                   {aperture && <span>f/{aperture}</span>}
                   {shutter && <span>{shutter}s</span>}
                   {iso && <span>ISO {iso}</span>}
                 </div>
               )}
-              <div className="flex flex-wrap items-center justify-center gap-x-3 text-white/30 text-[10px] tracking-wider">
+              <div className="flex flex-wrap items-center justify-center gap-x-3 text-white/40 text-[10px] tracking-wider">
                 {dimensions && <span>{dimensions}</span>}
                 {formatLabel && <span>{formatLabel}</span>}
                 {fileSize && <span>{fileSize}</span>}
@@ -325,26 +381,170 @@ export default function PhotoViewer({
         </div>
       )}
 
-      {/* Date and counter at bottom */}
-      <div data-footer className="absolute bottom-4 left-0 right-0 flex justify-center items-center gap-4 text-white/30 text-xs tracking-wide pointer-events-none z-30">
-        <span>{formatDate(image.created_at)}</span>
-        <span>·</span>
-        <span>
-          {currentIndex + 1} / {total}
-        </span>
-        {hasMetadata && (
-          <>
-            <span>·</span>
-            <button
-              onClick={(e) => { e.stopPropagation(); setShowMeta(!showMeta); }}
-              className="pointer-events-auto text-white/30 hover:text-white/60 transition-colors"
-              aria-label="Toggle metadata"
-            >
-              <Info className="w-3.5 h-3.5" />
-            </button>
-          </>
-        )}
+      {/* Footer */}
+      <div
+        data-interactive
+        className="absolute bottom-3 left-0 right-0 flex flex-col items-center gap-1.5 text-white/40 text-xs tracking-wide z-30 px-4 pb-2"
+      >
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-center">
+          <span className="tabular-nums">{formattedTaken}</span>
+          {hijriDate && (
+            <>
+              <span className="text-white/20">·</span>
+              <span dir="rtl" lang="ar" className="font-medium">
+                {hijriDate}
+              </span>
+            </>
+          )}
+          <span className="hidden sm:inline text-white/20">·</span>
+          <span className="hidden sm:inline tabular-nums text-[11px]">
+            {currentIndex + 1} / {total}
+          </span>
+        </div>
+        
+        {/* Desktop inline metadata */}
+        <div className="hidden sm:flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-white/50 text-[11px]">
+          {camera && <span>{camera}</span>}
+          {lens && <span>{lens}</span>}
+          {focalLength && (
+            <span>
+              {focalLength}
+              {typeof focalLength === "string" && !focalLength.includes("mm") ? "mm" : ""}
+            </span>
+          )}
+          {aperture && <span>f/{aperture}</span>}
+          {shutter && <span>{shutter}s</span>}
+          {iso && <span>ISO {iso}</span>}
+          {hasExif && (dimensions || fileSize || formatLabel || colorProfile) && (
+            <span className="text-white/20">|</span>
+          )}
+          {dimensions && <span>{dimensions}</span>}
+          {formatLabel && <span>{formatLabel}</span>}
+          {fileSize && <span>{fileSize}</span>}
+          {colorProfile && <span>{colorProfile}</span>}
+        </div>
+
+        {/* Mobile secondary row: Index and Info button */}
+        <div className="flex sm:hidden items-center gap-3 text-[11px] mt-0.5">
+          <span className="tabular-nums">
+            {currentIndex + 1} / {total}
+          </span>
+          <span className="text-white/20">·</span>
+          <button
+            data-interactive
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowMeta((v) => !v);
+            }}
+            className="text-white/40 hover:text-white/80 transition-colors p-1 -m-1"
+            aria-label="Toggle metadata"
+          >
+            <Info className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   );
+}
+
+function isInteractive(el: HTMLElement | null): boolean {
+  let node: HTMLElement | null = el;
+  while (node) {
+    if (node.tagName === "BUTTON" || node.tagName === "A") return true;
+    if (node.dataset?.interactive !== undefined) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+// --- Date helpers -----------------------------------------------------------
+
+type ResolvedDate = {
+  date: Date;
+  source: "exif" | "upload";
+  hasTime: boolean;
+  hasSubsec: boolean;
+};
+
+// EXIF dates look like "YYYY:MM:DD HH:MM:SS" (no timezone).
+// SubSecTimeOriginal is decimal fraction of a second as a string ("123" = 0.123s).
+function parseExifDate(value: string, subsec?: string): Date | null {
+  const m = value.match(/^(\d{4}):(\d{2}):(\d{2})(?:\s+(\d{2}):(\d{2}):(\d{2}))?/);
+  if (!m) return null;
+  const [, y, mo, d, hh, mm, ss] = m;
+  const ms = subsec ? parseInt(subsec.padEnd(3, "0").slice(0, 3), 10) : 0;
+  const date = new Date(
+    parseInt(y, 10),
+    parseInt(mo, 10) - 1,
+    parseInt(d, 10),
+    hh ? parseInt(hh, 10) : 0,
+    mm ? parseInt(mm, 10) : 0,
+    ss ? parseInt(ss, 10) : 0,
+    ms
+  );
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function resolveDate(meta: Record<string, string>, uploadedAt: string): ResolvedDate {
+  const exifCandidate =
+    meta.DateTimeOriginal || meta.CreateDate || meta.DateTime || meta.DateTimeDigitized;
+  const subsec =
+    meta.SubSecTimeOriginal || meta.SubSecTime || meta.SubSecTimeDigitized;
+
+  if (exifCandidate) {
+    const parsed = parseExifDate(exifCandidate, subsec);
+    if (parsed) {
+      const hasTime = /\d{2}:\d{2}:\d{2}/.test(exifCandidate);
+      return {
+        date: parsed,
+        source: "exif",
+        hasTime,
+        hasSubsec: !!subsec && hasTime,
+      };
+    }
+  }
+
+  return {
+    date: new Date(uploadedAt),
+    source: "upload",
+    hasTime: true,
+    hasSubsec: false,
+  };
+}
+
+function formatTakenDate(date: Date, hasTime: boolean, hasSubsec: boolean): string {
+  const dateStr = new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(date);
+
+  if (!hasTime) return dateStr;
+
+  const timeStr = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
+
+  const ms = hasSubsec ? `.${String(date.getMilliseconds()).padStart(3, "0")}` : "";
+  return `${dateStr}, ${timeStr}${ms}`;
+}
+
+function formatHijri(date: Date): string {
+  try {
+    return new Intl.DateTimeFormat("ar-SA-u-ca-islamic-umalqura", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(date);
+  } catch {
+    // Fallback for environments without Umalqura calendar support
+    return new Intl.DateTimeFormat("ar-u-ca-islamic", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(date);
+  }
 }

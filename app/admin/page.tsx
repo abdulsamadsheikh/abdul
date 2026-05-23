@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import AdminDashboard from "@/components/AdminDashboard";
 import { startRegistration, startAuthentication, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { Loader2, KeyRound, UserPlus } from "lucide-react";
+import LogoSpinner from "@/components/LogoSpinner";
 
 declare global {
   interface Window {
@@ -162,7 +163,7 @@ export default function AdminPage() {
   if (isLoading) {
     return (
       <main className="min-h-screen flex items-center justify-center p-4">
-        <Loader2 className="w-6 h-6 animate-spin text-white/60" />
+        <LogoSpinner size={48} />
       </main>
     );
   }

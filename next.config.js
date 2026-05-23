@@ -9,8 +9,11 @@ const nextConfig = {
       },
     ],
     formats: ["image/avif", "image/webp"],
-    minimumCacheTTL: 60 * 60 * 24 * 7, // Cache for 1 week
-    unoptimized: true, // Let Cloudinary handle optimization
+    minimumCacheTTL: 60 * 60 * 24 * 7, // 1 week
+    deviceSizes: [320, 480, 640, 750, 828, 1080, 1200, 1600, 1920],
+    imageSizes: [16, 32, 48, 64, 96, 128, 256, 384],
+    loader: "custom",
+    loaderFile: "./lib/cloudinary-loader.ts",
   },
   experimental: {
     optimizeCss: true,

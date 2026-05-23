@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import Image from "next/image";
 import { Upload, Plus, Check, X, Camera, Image as ImageIcon, Loader2 } from "lucide-react";
 import type { CloudinaryImage, Collection } from "@/lib/cloudinary";
@@ -30,8 +30,11 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [duplicateCount, setDuplicateCount] = useState(0);
+  const [failedCount, setFailedCount] = useState(0);
+  const [uploadErrors, setUploadErrors] = useState<{ name: string; reason: string }[]>([]);
   const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const MAX_FILE_SIZE = 25 * 1024 * 1024;
 
   useEffect(() => {
     if (activeTab === "manage") {
@@ -40,6 +43,14 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       fetchCollections();
     }
   }, [activeTab]);
+
+  const filteredImages = useMemo(
+    () =>
+      selectedCollection
+        ? images.filter((img) => img.context?.collection === selectedCollection)
+        : images,
+    [images, selectedCollection]
+  );
 
   const fetchImages = async () => {
     try {
@@ -68,12 +79,34 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const newPreviews: PreviewFile[] = files.map((file) => ({
-      file,
-      preview: URL.createObjectURL(file),
-      id: Math.random().toString(36).substr(2, 9),
-    }));
-    setPreviewFiles((prev) => [...prev, ...newPreviews]);
+    const rejected: string[] = [];
+    const accepted: PreviewFile[] = [];
+
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE) {
+        rejected.push(`${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`);
+        continue;
+      }
+      if (file.size === 0) {
+        rejected.push(`${file.name} (empty)`);
+        continue;
+      }
+      accepted.push({
+        file,
+        preview: URL.createObjectURL(file),
+        id: Math.random().toString(36).slice(2, 11),
+      });
+    }
+
+    if (rejected.length) {
+      showNotification(
+        "error",
+        `Skipped ${rejected.length} file${rejected.length !== 1 ? "s" : ""}: ${rejected.slice(0, 2).join(", ")}${rejected.length > 2 ? "…" : ""}`
+      );
+    }
+    setPreviewFiles((prev) => [...prev, ...accepted]);
+    // Reset input so the same file can be reselected
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const removePreview = (id: string) => {
@@ -92,59 +125,83 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     setIsUploading(true);
     setUploadProgress(0);
     setDuplicateCount(0);
+    setFailedCount(0);
+    setUploadErrors([]);
 
-    try {
-      let uploaded = 0;
-      let duplicates = 0;
+    let uploaded = 0;
+    let duplicates = 0;
+    let failed = 0;
+    const errors: { name: string; reason: string }[] = [];
+    // Hold a snapshot — state may change during async work
+    const filesToUpload = previewFiles;
 
-      // Upload sequentially to get accurate progress and duplicate tracking
-      for (const previewFile of previewFiles) {
-        const formData = new FormData();
-        formData.append("file", previewFile.file);
+    for (const previewFile of filesToUpload) {
+      const formData = new FormData();
+      formData.append("file", previewFile.file);
 
+      try {
         const response = await fetch("/api/upload", {
           method: "POST",
           body: formData,
         });
 
-        if (response.status === 409) {
-          duplicates++;
-        } else if (response.ok) {
-          uploaded++;
+        let payload: any = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
         }
 
-        setUploadProgress(Math.round(((uploaded + duplicates) / previewFiles.length) * 100));
+        if (response.ok) {
+          uploaded++;
+        } else if (response.status === 409) {
+          duplicates++;
+        } else {
+          failed++;
+          errors.push({
+            name: previewFile.file.name,
+            reason: payload?.message || `HTTP ${response.status}`,
+          });
+        }
+      } catch (err: any) {
+        failed++;
+        errors.push({
+          name: previewFile.file.name,
+          reason: err?.message || "Network error",
+        });
       }
 
-      setDuplicateCount(duplicates);
-
-      // Success
-      setUploadSuccess(true);
-      if (duplicates > 0 && uploaded > 0) {
-        showNotification("success", `Uploaded ${uploaded}, skipped ${duplicates} duplicate${duplicates !== 1 ? "s" : ""}`);
-      } else if (duplicates > 0 && uploaded === 0) {
-        showNotification("error", `All ${duplicates} photo${duplicates !== 1 ? "s" : ""} already exist`);
-      } else {
-        showNotification("success", `Uploaded ${uploaded} photo${uploaded !== 1 ? "s" : ""}`);
-      }
-
-      // Clear previews
-      previewFiles.forEach((file) => URL.revokeObjectURL(file.preview));
-      setPreviewFiles([]);
-
-      // Reset success state after delay
-      setTimeout(() => {
-        setUploadSuccess(false);
-        setDuplicateCount(0);
-      }, 3000);
-
-    } catch (error) {
-      console.error("Upload error:", error);
-      showNotification("error", "Upload failed. Please try again.");
-    } finally {
-      setIsUploading(false);
-      setUploadProgress(0);
+      setUploadProgress(
+        Math.round(((uploaded + duplicates + failed) / filesToUpload.length) * 100)
+      );
     }
+
+    setDuplicateCount(duplicates);
+    setFailedCount(failed);
+    setUploadErrors(errors);
+    setUploadSuccess(true);
+
+    // Build summary message
+    const parts: string[] = [];
+    if (uploaded) parts.push(`Uploaded ${uploaded}`);
+    if (duplicates) parts.push(`skipped ${duplicates} duplicate${duplicates !== 1 ? "s" : ""}`);
+    if (failed) parts.push(`${failed} failed`);
+    const summary = parts.join(", ") || "Nothing uploaded";
+    showNotification(failed > 0 || (uploaded === 0 && duplicates === 0) ? "error" : "success", summary);
+
+    // Clear previews
+    filesToUpload.forEach((file) => URL.revokeObjectURL(file.preview));
+    setPreviewFiles([]);
+
+    setIsUploading(false);
+    setUploadProgress(0);
+
+    // Hide success overlay after a moment, but keep error details visible
+    setTimeout(() => {
+      setUploadSuccess(false);
+      setDuplicateCount(0);
+      // Keep errors visible until user dismisses
+    }, failed > 0 ? 6000 : 2500);
   };
 
   const cleanDuplicates = async () => {
@@ -336,7 +393,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   return (
     <main className="min-h-screen bg-background">
       {/* Header */}
-      <header className="fixed top-0 left-0 right-0 z-40 bg-background/80 backdrop-blur-sm border-b border-white/10">
+      <header className="fixed top-0 left-0 right-0 z-40 bg-background border-b border-white/10">
         <div className="px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img 
@@ -415,14 +472,51 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             {/* Upload Area */}
             <div className="flex-1 p-6 relative">
               {uploadSuccess && (
-                <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-10 rounded-2xl">
-                  <div className="text-center">
-                    <div className={`w-20 h-20 ${duplicateCount > 0 && duplicateCount === previewFiles.length ? 'bg-yellow-500' : 'bg-green-500'} rounded-full flex items-center justify-center mx-auto mb-4`}>
-                      <Check className="w-10 h-10 text-white" />
+                <div className="absolute inset-0 bg-black/85 flex items-center justify-center z-10 rounded-2xl p-6">
+                  <div className="text-center max-w-sm w-full">
+                    <div
+                      className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 ${
+                        failedCount > 0
+                          ? "bg-red-500"
+                          : duplicateCount > 0
+                          ? "bg-yellow-500"
+                          : "bg-green-500"
+                      }`}
+                    >
+                      {failedCount > 0 ? (
+                        <X className="w-10 h-10 text-white" />
+                      ) : (
+                        <Check className="w-10 h-10 text-white" />
+                      )}
                     </div>
-                    <p className="text-white text-sm font-medium">
-                      {duplicateCount > 0 ? `Skipped ${duplicateCount} duplicate${duplicateCount !== 1 ? 's' : ''}` : 'Upload Complete!'}
+                    <p className="text-white text-sm font-medium mb-1">
+                      {failedCount > 0
+                        ? `${failedCount} upload${failedCount !== 1 ? "s" : ""} failed`
+                        : duplicateCount > 0
+                        ? `Skipped ${duplicateCount} duplicate${duplicateCount !== 1 ? "s" : ""}`
+                        : "Upload Complete!"}
                     </p>
+                    {uploadErrors.length > 0 && (
+                      <div className="mt-4 text-left bg-black/40 rounded-lg p-3 max-h-48 overflow-y-auto scrollbar-hide">
+                        {uploadErrors.map((e, i) => (
+                          <div key={i} className="text-[11px] mb-1">
+                            <span className="text-white/80">{e.name}</span>
+                            <span className="text-red-400 ml-1">— {e.reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => {
+                        setUploadSuccess(false);
+                        setUploadErrors([]);
+                        setFailedCount(0);
+                        setDuplicateCount(0);
+                      }}
+                      className="mt-4 text-white/60 text-xs hover:text-white/80"
+                    >
+                      Dismiss
+                    </button>
                   </div>
                 </div>
               )}
@@ -503,104 +597,139 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
         {/* Manage Tab */}
         {activeTab === "manage" && (
-          <div className="p-4">
-            {/* Duplicate Cleanup */}
-            <div className="mb-4 flex items-center justify-end">
-              <button
-                onClick={cleanDuplicates}
-                disabled={isCleaningDuplicates}
-                className="text-white/60 text-xs hover:text-white/80 transition-colors flex items-center gap-2 disabled:opacity-50"
-              >
-                {isCleaningDuplicates ? (
-                  <><Loader2 className="w-3 h-3 animate-spin" /> Scanning...</>
-                ) : (
-                  'Clean Duplicates'
-                )}
-              </button>
-            </div>
-
-            {/* Actions Bar */}
-            {selectedImages.size > 0 && (
-              <div className="mb-4 p-4 bg-white/5 rounded-lg flex items-center gap-4 flex-wrap">
-                <span className="text-white/80 text-sm">
-                  {selectedImages.size} selected
+          <div className="p-4 pb-32">
+            {/* Filter + Tools */}
+            <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2 text-xs text-white/50">
+                <span className="tabular-nums">
+                  {filteredImages.length} of {images.length} photos
                 </span>
-                
-                <input
-                  type="text"
-                  placeholder="New collection name"
-                  value={newCollectionName}
-                  onChange={(e) => setNewCollectionName(e.target.value)}
-                  className="bg-white/10 border border-white/20 rounded px-3 py-2 text-white text-sm placeholder-white/40"
-                />
-                
+                {selectedCollection && (
+                  <button
+                    onClick={() => setSelectedCollection("")}
+                    className="ml-2 px-2 py-0.5 bg-white/10 hover:bg-white/20 rounded-full text-white/70 inline-flex items-center gap-1"
+                  >
+                    {selectedCollection}
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
                 <button
-                  onClick={addToCollection}
-                  disabled={isLoading || !newCollectionName.trim()}
-                  className="bg-white/20 text-white px-4 py-2 text-sm rounded hover:bg-white/30 transition-colors disabled:opacity-50"
+                  onClick={() => setSelectedImages(new Set(filteredImages.map(i => i.public_id)))}
+                  className="text-white/50 text-xs hover:text-white/80 transition-colors"
                 >
-                  Add to Collection
+                  Select all
                 </button>
-                
                 <button
-                  onClick={removeFromCollection}
-                  disabled={isLoading}
-                  className="bg-white/20 text-white px-4 py-2 text-sm rounded hover:bg-white/30 transition-colors disabled:opacity-50"
+                  onClick={cleanDuplicates}
+                  disabled={isCleaningDuplicates}
+                  className="text-white/50 text-xs hover:text-white/80 transition-colors flex items-center gap-1.5 disabled:opacity-50"
                 >
-                  Remove from Collection
-                </button>
-                
-                <button
-                  onClick={deleteSelectedImages}
-                  disabled={isLoading}
-                  className="bg-red-600/80 text-white px-4 py-2 text-sm rounded hover:bg-red-600 transition-colors disabled:opacity-50"
-                >
-                  Delete
+                  {isCleaningDuplicates ? (
+                    <><Loader2 className="w-3 h-3 animate-spin" /> Scanning…</>
+                  ) : (
+                    "Clean duplicates"
+                  )}
                 </button>
               </div>
-            )}
+            </div>
 
             {/* Images Grid */}
             <div className="columns-2 sm:columns-3 md:columns-4 lg:columns-5 gap-2">
-              {images.map((image) => (
-                <div
-                  key={image.public_id}
-                  className={`relative mb-2 break-inside-avoid cursor-pointer group ${
-                    selectedImages.has(image.public_id) ? "ring-2 ring-white" : ""
-                  }`}
-                  onClick={() => toggleImageSelection(image.public_id)}
-                >
-                  <Image
-                    src={image.secure_url}
-                    alt=""
-                    width={image.width}
-                    height={image.height}
-                    className="w-full h-auto"
-                    sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
-                  />
-                  
-                  {/* Selection Overlay */}
-                  {selectedImages.has(image.public_id) && (
-                    <div className="absolute inset-0 bg-white/20 flex items-center justify-center">
-                      <div className="w-6 h-6 bg-white rounded flex items-center justify-center">
-                        <span className="text-black text-xs">✓</span>
-                      </div>
-                    </div>
-                  )}
+              {filteredImages.map((image) => {
+                const isSelected = selectedImages.has(image.public_id);
+                return (
+                  <div
+                    key={image.public_id}
+                    className={`relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded ${
+                      isSelected ? "ring-2 ring-white" : ""
+                    }`}
+                    onClick={() => toggleImageSelection(image.public_id)}
+                  >
+                    <Image
+                      src={image.secure_url}
+                      alt=""
+                      width={image.width}
+                      height={image.height}
+                      className="w-full h-auto"
+                      sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                      loading="lazy"
+                    />
 
-                  {/* Collection Badge */}
-                  {image.context?.collection && (
-                    <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-white text-xs">
-                      {image.context.collection}
-                    </div>
-                  )}
-                </div>
-              ))}
+                    {isSelected && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center pointer-events-none">
+                        <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center">
+                          <Check className="w-4 h-4 text-black" strokeWidth={3} />
+                        </div>
+                      </div>
+                    )}
+
+                    {image.context?.collection && (
+                      <div className="absolute bottom-1.5 left-1.5 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-full text-white/90 text-[10px] font-medium pointer-events-none">
+                        {image.context.collection}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
-            {images.length === 0 && (
+            {filteredImages.length === 0 && (
               <div className="text-center py-12">
-                <p className="text-white/40 text-sm">No photos yet</p>
+                <p className="text-white/40 text-sm">
+                  {selectedCollection
+                    ? `No photos in "${selectedCollection}"`
+                    : "No photos yet"}
+                </p>
+              </div>
+            )}
+
+            {/* Sticky Actions Bar (mobile-first) */}
+            {selectedImages.size > 0 && (
+              <div className="fixed bottom-0 left-0 right-0 z-40 bg-background/95 backdrop-blur-md border-t border-white/10 px-3 py-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-white/80 text-xs font-medium px-2">
+                    {selectedImages.size} selected
+                  </span>
+                  <button
+                    onClick={() => setSelectedImages(new Set())}
+                    className="text-white/50 text-xs hover:text-white/80 px-2"
+                  >
+                    Clear
+                  </button>
+
+                  <div className="flex-1" />
+
+                  <input
+                    type="text"
+                    placeholder="Collection name"
+                    value={newCollectionName}
+                    onChange={(e) => setNewCollectionName(e.target.value)}
+                    className="bg-white/10 border border-white/15 rounded-full px-3 py-1.5 text-white text-xs placeholder-white/40 w-32"
+                  />
+                  <button
+                    onClick={addToCollection}
+                    disabled={isLoading || !newCollectionName.trim()}
+                    className="bg-white text-black px-3 py-1.5 text-xs rounded-full hover:bg-white/90 transition-colors disabled:opacity-50 font-medium"
+                  >
+                    Add to collection
+                  </button>
+                  <button
+                    onClick={removeFromCollection}
+                    disabled={isLoading}
+                    className="bg-white/10 text-white px-3 py-1.5 text-xs rounded-full hover:bg-white/20 transition-colors disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                  <button
+                    onClick={deleteSelectedImages}
+                    disabled={isLoading}
+                    className="bg-red-600/90 text-white px-3 py-1.5 text-xs rounded-full hover:bg-red-600 transition-colors disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -609,39 +738,43 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         {/* Collections Tab */}
         {activeTab === "collections" && (
           <div className="p-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
               {collections.map((collection) => (
-                <div
+                <button
                   key={collection.name}
-                  className="bg-white/5 rounded-lg overflow-hidden hover:bg-white/10 transition-colors cursor-pointer"
+                  className="group relative aspect-[4/5] rounded-xl overflow-hidden bg-white/5 hover:ring-2 hover:ring-white/40 transition-all text-left"
                   onClick={() => {
                     setSelectedCollection(collection.name);
                     setActiveTab("manage");
                   }}
                 >
                   {collection.cover_image && (
-                    <div className="aspect-video relative">
-                      <Image
-                        src={collection.cover_image}
-                        alt={collection.name}
-                        fill
-                        className="object-cover"
-                      />
-                    </div>
+                    <Image
+                      src={collection.cover_image}
+                      alt={collection.name}
+                      fill
+                      className="object-cover group-hover:scale-105 transition-transform duration-500"
+                      sizes="(max-width: 768px) 50vw, 25vw"
+                    />
                   )}
-                  <div className="p-4">
-                    <h3 className="text-white font-medium">{collection.name}</h3>
-                    <p className="text-white/60 text-sm">{collection.count} photos</p>
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
+                  <div className="absolute bottom-0 left-0 right-0 p-3">
+                    <h3 className="text-white font-medium text-sm capitalize truncate">
+                      {collection.name}
+                    </h3>
+                    <p className="text-white/60 text-xs tabular-nums">
+                      {collection.count} photo{collection.count !== 1 ? "s" : ""}
+                    </p>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
 
             {collections.length === 0 && (
-              <div className="text-center py-12">
+              <div className="text-center py-16">
                 <p className="text-white/40 text-sm">No collections yet</p>
-                <p className="text-white/40 text-xs mt-2">
-                  Create collections by selecting photos and adding them to a new collection
+                <p className="text-white/40 text-xs mt-2 max-w-xs mx-auto">
+                  Select photos in the Manage tab and add them to a new collection.
                 </p>
               </div>
             )}

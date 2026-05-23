@@ -32,8 +32,28 @@ export interface Collection {
   cover_image?: string;
 }
 
-// Internal function to fetch images from Cloudinary (paginated)
-async function fetchImages(folder: string): Promise<CloudinaryImage[]> {
+// Generic 1x1 blur placeholder. Cloudinary returns no per-image blur via the search API,
+// so this is a deliberate compromise to avoid an extra round-trip per image.
+const BLUR_DATA_URL =
+  "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A8A";
+
+function toCloudinaryImage(resource: any): CloudinaryImage {
+  return {
+    public_id: resource.public_id,
+    secure_url: cloudinary.url(resource.public_id, { secure: true }),
+    width: resource.width,
+    height: resource.height,
+    format: resource.format,
+    created_at: resource.created_at,
+    blur_data_url: BLUR_DATA_URL,
+    folder: resource.folder,
+    context: resource.context || {},
+    etag: resource.etag || "",
+  };
+}
+
+// SINGLE source of truth: fetch every image once, derive everything else from it.
+async function fetchAllImages(folder: string): Promise<CloudinaryImage[]> {
   const allResources: any[] = [];
   let nextCursor: string | undefined;
 
@@ -49,186 +69,61 @@ async function fetchImages(folder: string): Promise<CloudinaryImage[]> {
     nextCursor = result.next_cursor;
   } while (nextCursor);
 
-  const blurDataURL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A8A";
-
-  return allResources.map((resource: any) => {
-    const optimizedUrl = cloudinary.url(resource.public_id, {
-      transformation: [
-        { width: 800, crop: "limit" },
-        { quality: "auto", fetch_format: "auto" },
-        { angle: "auto" }
-      ]
-    });
-
-    const aspectRatio = resource.height / resource.width;
-    const optimizedHeight = Math.round(800 * aspectRatio);
-
-    return {
-      public_id: resource.public_id,
-      secure_url: optimizedUrl,
-      width: 800,
-      height: optimizedHeight,
-      format: resource.format,
-      created_at: resource.created_at,
-      blur_data_url: blurDataURL,
-      folder: resource.folder,
-      context: resource.context || {},
-      etag: resource.etag || "",
-    };
-  });
+  return allResources.map(toCloudinaryImage);
 }
 
-// Cached version - revalidates every hour or on-demand via tag
-// Note: errors thrown here won't be cached, only successful responses
-const getCachedImages = unstable_cache(
-  async (folder: string): Promise<CloudinaryImage[]> => {
-    return await fetchImages(folder);
-  },
-  ["cloudinary-images"],
+const getCachedAllImages = unstable_cache(
+  async (folder: string): Promise<CloudinaryImage[]> => fetchAllImages(folder),
+  ["cloudinary-all-images"],
   { revalidate: 3600, tags: ["cloudinary-images"] }
 );
 
-export async function getImages(folder: string = "gallery"): Promise<CloudinaryImage[]> {
+async function getAll(folder: string = "gallery"): Promise<CloudinaryImage[]> {
   try {
-    return await getCachedImages(folder);
+    return await getCachedAllImages(folder);
   } catch (error) {
     console.error("Error fetching images from Cloudinary:", error);
     return [];
   }
 }
 
-// Internal function to fetch images by collection (paginated)
-async function fetchImagesByCollection(collection: string): Promise<CloudinaryImage[]> {
-  const allResources: any[] = [];
-  let nextCursor: string | undefined;
-
-  do {
-    const search = cloudinary.search
-      .expression(`folder:gallery`)
-      .with_field("context")
-      .sort_by("created_at", "desc")
-      .max_results(500);
-    if (nextCursor) search.next_cursor(nextCursor);
-    const result = await search.execute();
-    allResources.push(...result.resources);
-    nextCursor = result.next_cursor;
-  } while (nextCursor);
-
-  const result = { resources: allResources };
-
-  const blurDataURL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A8A";
-
-  return result.resources
-    .filter((resource: any) => resource.context?.collection === collection)
-    .map((resource: any) => {
-      const optimizedUrl = cloudinary.url(resource.public_id, {
-        transformation: [
-          { width: 800, crop: "limit" },
-          { quality: "auto", fetch_format: "auto" },
-          { angle: "auto" }
-        ]
-      });
-
-      const aspectRatio = resource.height / resource.width;
-      const optimizedHeight = Math.round(800 * aspectRatio);
-
-      return {
-        public_id: resource.public_id,
-        secure_url: optimizedUrl,
-        width: 800,
-        height: optimizedHeight,
-        format: resource.format,
-        created_at: resource.created_at,
-        blur_data_url: blurDataURL,
-        folder: resource.folder,
-        context: resource.context || {},
-        etag: resource.etag || "",
-      };
-    });
+export async function getImages(folder: string = "gallery"): Promise<CloudinaryImage[]> {
+  return getAll(folder);
 }
-
-// Cached version
-const getCachedImagesByCollection = unstable_cache(
-  async (collection: string): Promise<CloudinaryImage[]> => {
-    return await fetchImagesByCollection(collection);
-  },
-  ["cloudinary-collection-images"],
-  { revalidate: 3600, tags: ["cloudinary-images"] }
-);
 
 export async function getImagesByCollection(collection: string): Promise<CloudinaryImage[]> {
-  try {
-    return await getCachedImagesByCollection(collection);
-  } catch (error) {
-    console.error("Error fetching collection images:", error);
-    return [];
-  }
+  const all = await getAll("gallery");
+  return all.filter((img) => img.context?.collection === collection);
 }
-
-// Internal function to fetch collections (paginated)
-async function fetchCollections(): Promise<Collection[]> {
-  const allResources: any[] = [];
-  let nextCursor: string | undefined;
-
-  do {
-    const search = cloudinary.search
-      .expression(`folder:gallery`)
-      .with_field("context")
-      .max_results(500);
-    if (nextCursor) search.next_cursor(nextCursor);
-    const result = await search.execute();
-    allResources.push(...result.resources);
-    nextCursor = result.next_cursor;
-  } while (nextCursor);
-
-  const collectionsMap = new Map<string, { count: number; latest: string }>();
-  
-  allResources.forEach((resource: any) => {
-    const collection = resource.context?.collection;
-    if (collection) {
-      const existing = collectionsMap.get(collection) || { count: 0, latest: "" };
-      collectionsMap.set(collection, {
-        count: existing.count + 1,
-        latest: resource.created_at > existing.latest ? resource.public_id : existing.latest,
-      });
-    }
-  });
-
-  const collections = Array.from(collectionsMap.entries()).map(([name, data]) => {
-    const coverUrl = cloudinary.url(data.latest, {
-      width: 300,
-      height: 200,
-      crop: "fill",
-      quality: "auto",
-      format: "auto",
-    });
-
-    return {
-      name,
-      count: data.count,
-      cover_image: coverUrl,
-    };
-  });
-
-  return collections.sort((a, b) => b.count - a.count);
-}
-
-// Cached version
-const getCachedCollections = unstable_cache(
-  async (): Promise<Collection[]> => {
-    return await fetchCollections();
-  },
-  ["cloudinary-collections"],
-  { revalidate: 3600, tags: ["cloudinary-images"] }
-);
 
 export async function getCollections(): Promise<Collection[]> {
-  try {
-    return await getCachedCollections();
-  } catch (error) {
-    console.error("Error fetching collections:", error);
-    return [];
+  const all = await getAll("gallery");
+  const map = new Map<string, { count: number; latest: string }>();
+
+  for (const img of all) {
+    const name = img.context?.collection;
+    if (!name) continue;
+    const existing = map.get(name) || { count: 0, latest: "" };
+    map.set(name, {
+      count: existing.count + 1,
+      latest: img.created_at > existing.latest ? img.public_id : existing.latest,
+    });
   }
+
+  const collections = Array.from(map.entries()).map(([name, data]) => ({
+    name,
+    count: data.count,
+    cover_image: cloudinary.url(data.latest, {
+      width: 600,
+      height: 400,
+      crop: "fill",
+      quality: "auto",
+      fetch_format: "auto",
+      secure: true,
+    }),
+  }));
+
+  return collections.sort((a, b) => b.count - a.count);
 }
 
 export async function deleteImage(publicId: string): Promise<boolean> {
@@ -241,7 +136,10 @@ export async function deleteImage(publicId: string): Promise<boolean> {
   }
 }
 
-export async function addImageToCollection(publicId: string, collection: string): Promise<boolean> {
+export async function addImageToCollection(
+  publicId: string,
+  collection: string
+): Promise<boolean> {
   try {
     await cloudinary.uploader.add_context(`collection=${collection}`, [publicId]);
     return true;
@@ -269,40 +167,40 @@ export function getOptimizedUrl(publicId: string, width: number): string {
     format: "auto",
     fetch_format: "auto",
     angle: "auto_right",
+    secure: true,
   });
 }
 
 // Re-export from utils for backward compatibility
 export { getPhotoId, getFullPublicId } from "./utils";
 
-export async function getImageByPhotoId(photoId: string, folder: string = "gallery"): Promise<CloudinaryImage | null> {
-  const fullPublicId = getFullPublicId(photoId, folder);
-  try {
-    const result = await cloudinary.api.resource(fullPublicId, {
+const getCachedResource = unstable_cache(
+  async (fullPublicId: string) =>
+    cloudinary.api.resource(fullPublicId, {
       colors: false,
       faces: false,
       image_metadata: true,
-    });
+    }),
+  ["cloudinary-resource"],
+  { revalidate: 86400, tags: ["cloudinary-images"] }
+);
 
-    const blurDataURL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A8A";
-
-    // Build full-screen optimized URL
-    const fullScreenUrl = cloudinary.url(result.public_id, {
-      transformation: [
-        { width: 1920, crop: "limit" },
-        { quality: "auto:best", fetch_format: "auto" },
-        { angle: "auto" }
-      ]
-    });
+export async function getImageByPhotoId(
+  photoId: string,
+  folder: string = "gallery"
+): Promise<CloudinaryImage | null> {
+  const fullPublicId = getFullPublicId(photoId, folder);
+  try {
+    const result = await getCachedResource(fullPublicId);
 
     return {
       public_id: result.public_id,
-      secure_url: fullScreenUrl,
+      secure_url: cloudinary.url(result.public_id, { secure: true }),
       width: result.width,
       height: result.height,
       format: result.format,
       created_at: result.created_at,
-      blur_data_url: blurDataURL,
+      blur_data_url: BLUR_DATA_URL,
       folder: result.folder,
       context: result.context || {},
       image_metadata: result.image_metadata || {},
@@ -311,18 +209,17 @@ export async function getImageByPhotoId(photoId: string, folder: string = "galle
       original_height: result.height,
     };
   } catch (error) {
-    // Only log unexpected errors, not 404s which are handled by notFound()
-    const is404 = error && typeof error === 'object' && 'error' in error && 
-                 error.error && typeof error.error === 'object' && 
-                 'http_code' in error.error && error.error.http_code === 404;
-    
+    const is404 =
+      error &&
+      typeof error === "object" &&
+      "error" in error &&
+      (error as any).error?.http_code === 404;
+
     if (!is404) {
       console.error("Error fetching image by ID:", {
-        error,
         photoId,
         fullPublicId,
         errorMessage: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack : undefined,
       });
     }
     return null;
@@ -330,52 +227,13 @@ export async function getImageByPhotoId(photoId: string, folder: string = "galle
 }
 
 export async function getAllPhotoIds(folder: string = "gallery"): Promise<string[]> {
-  try {
-    const allResources: any[] = [];
-    let nextCursor: string | undefined;
-
-    do {
-      const search = cloudinary.search
-        .expression(`folder:${folder}`)
-        .sort_by("created_at", "desc")
-        .max_results(500);
-      if (nextCursor) search.next_cursor(nextCursor);
-      const result = await search.execute();
-      allResources.push(...result.resources);
-      nextCursor = result.next_cursor;
-    } while (nextCursor);
-
-    return allResources.map((resource: any) => getPhotoId(resource.public_id));
-  } catch (error) {
-    console.error("Error fetching all photo IDs:", error);
-    return [];
-  }
+  const all = await getAll(folder);
+  return all.map((img) => getPhotoId(img.public_id));
 }
 
 export async function getPhotoIdsByCollection(collection: string): Promise<string[]> {
-  try {
-    const allResources: any[] = [];
-    let nextCursor: string | undefined;
-
-    do {
-      const search = cloudinary.search
-        .expression(`folder:gallery`)
-        .with_field("context")
-        .sort_by("created_at", "desc")
-        .max_results(500);
-      if (nextCursor) search.next_cursor(nextCursor);
-      const result = await search.execute();
-      allResources.push(...result.resources);
-      nextCursor = result.next_cursor;
-    } while (nextCursor);
-
-    return allResources
-      .filter((resource: any) => resource.context?.collection === collection)
-      .map((resource: any) => getPhotoId(resource.public_id));
-  } catch (error) {
-    console.error("Error fetching collection photo IDs:", error);
-    return [];
-  }
+  const imgs = await getImagesByCollection(collection);
+  return imgs.map((img) => getPhotoId(img.public_id));
 }
 
 export async function getAdjacentPhotos(
@@ -383,18 +241,17 @@ export async function getAdjacentPhotos(
   collection?: string
 ): Promise<{ prev: string | null; next: string | null; total: number; currentIndex: number }> {
   try {
-    // Get photo IDs based on whether we're in a collection or not
-    const allIds = collection 
+    const allIds = collection
       ? await getPhotoIdsByCollection(collection)
       : await getAllPhotoIds("gallery");
-    
+
     const currentIndex = allIds.indexOf(currentPhotoId);
-    
+
     if (currentIndex === -1) {
       return { prev: null, next: null, total: 0, currentIndex: -1 };
     }
 
-    // Loop navigation: last->first, first->last
+    // Wrap-around navigation
     const prevIndex = currentIndex === 0 ? allIds.length - 1 : currentIndex - 1;
     const nextIndex = currentIndex === allIds.length - 1 ? 0 : currentIndex + 1;
 
@@ -410,27 +267,16 @@ export async function getAdjacentPhotos(
   }
 }
 
-// Fetch all etags for duplicate detection
-export async function getAllEtags(folder: string = "gallery"): Promise<{ etag: string; public_id: string }[]> {
-  const allResources: any[] = [];
-  let nextCursor: string | undefined;
-
-  do {
-    const search = cloudinary.search
-      .expression(`folder:${folder}`)
-      .sort_by("created_at", "desc")
-      .max_results(500);
-    if (nextCursor) search.next_cursor(nextCursor);
-    const result = await search.execute();
-    allResources.push(...result.resources);
-    nextCursor = result.next_cursor;
-  } while (nextCursor);
-
-  return allResources.map((r: any) => ({ etag: r.etag, public_id: r.public_id }));
+export async function getAllEtags(
+  folder: string = "gallery"
+): Promise<{ etag: string; public_id: string }[]> {
+  const all = await getAll(folder);
+  return all.map((img) => ({ etag: img.etag || "", public_id: img.public_id }));
 }
 
-// Find duplicate images by etag
-export async function findDuplicates(folder: string = "gallery"): Promise<{ etag: string; public_ids: string[]; keep: string }[]> {
+export async function findDuplicates(
+  folder: string = "gallery"
+): Promise<{ etag: string; public_ids: string[]; keep: string }[]> {
   const all = await getAllEtags(folder);
   const etagMap = new Map<string, string[]>();
 

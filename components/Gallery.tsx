@@ -2,7 +2,13 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 import type { CloudinaryImage } from "@/lib/cloudinary";
 import { getPhotoId } from "@/lib/utils";
 
@@ -17,58 +23,136 @@ interface PositionedImage {
   y: number;
   width: number;
   height: number;
-  originalIndex: number;
+  index: number;
+}
+
+// useLayoutEffect on client only — avoids SSR warning
+const useIsoLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
+const GAP = 8;
+
+function getColumnCount(width: number): number {
+  if (width >= 1024) return 4;
+  if (width >= 768) return 3;
+  return 2;
 }
 
 export default function Gallery({ images, collection }: GalleryProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [positions, setPositions] = useState<PositionedImage[]>([]);
   const [containerHeight, setContainerHeight] = useState(0);
-  const gap = 8; // 2 * 4px = 8px gap
 
-  const calculatePositions = useCallback(() => {
-    if (!containerRef.current || images.length === 0) return;
+  const compute = useCallback(() => {
+    const el = containerRef.current;
+    if (!el || images.length === 0) return;
 
-    const containerWidth = containerRef.current.offsetWidth;
-    let columnCount = 2;
-    if (window.innerWidth >= 1024) columnCount = 4;
-    else if (window.innerWidth >= 768) columnCount = 3;
+    const containerWidth = el.offsetWidth;
+    const cols = getColumnCount(window.innerWidth);
+    const colW = (containerWidth - GAP * (cols - 1)) / cols;
+    const colH: number[] = new Array(cols).fill(0);
+    const next: PositionedImage[] = [];
 
-    const columnWidth = (containerWidth - gap * (columnCount - 1)) / columnCount;
-    const columnHeights = new Array(columnCount).fill(0);
-    const newPositions: PositionedImage[] = [];
-
-    // Place each image in the shortest column (maintains reading order priority)
+    // Reading order: each image goes to the shortest column.
+    // This keeps newest photo top-left, then second top-row second column, etc.
     images.forEach((image, index) => {
-      // Find the shortest column
-      const minHeight = Math.min(...columnHeights);
-      const columnIndex = columnHeights.indexOf(minHeight);
-
-      // Calculate image height based on aspect ratio
-      const aspectRatio = image.height / image.width;
-      const imageHeight = columnWidth * aspectRatio;
-
-      newPositions.push({
+      let colIdx = 0;
+      let minH = colH[0];
+      for (let i = 1; i < cols; i++) {
+        if (colH[i] < minH) {
+          minH = colH[i];
+          colIdx = i;
+        }
+      }
+      const aspect = image.height / image.width;
+      const h = colW * aspect;
+      next.push({
         image,
-        x: columnIndex * (columnWidth + gap),
-        y: columnHeights[columnIndex],
-        width: columnWidth,
-        height: imageHeight,
-        originalIndex: index,
+        x: colIdx * (colW + GAP),
+        y: colH[colIdx],
+        width: colW,
+        height: h,
+        index,
       });
-
-      columnHeights[columnIndex] += imageHeight + gap;
+      colH[colIdx] += h + GAP;
     });
 
-    setPositions(newPositions);
-    setContainerHeight(Math.max(...columnHeights));
-  }, [images, gap]);
+    setPositions(next);
+    setContainerHeight(Math.max(...colH));
+  }, [images]);
 
+  // Synchronous layout before paint to avoid scroll-restoration flicker
+  useIsoLayoutEffect(() => {
+    compute();
+  }, [compute]);
+
+  // Throttled resize handler
   useEffect(() => {
-    calculatePositions();
-    window.addEventListener("resize", calculatePositions);
-    return () => window.removeEventListener("resize", calculatePositions);
-  }, [calculatePositions]);
+    let raf = 0;
+    const onResize = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(compute);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(raf);
+    };
+  }, [compute]);
+
+  // Debounced scroll-position save, keyed by pathname. Used as a fallback
+  // when no last-viewed photo is recorded.
+  useEffect(() => {
+    const key = `scroll:${window.location.pathname}`;
+    let saveTimer: ReturnType<typeof setTimeout> | null = null;
+    const onScroll = () => {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        sessionStorage.setItem(key, String(window.scrollY));
+      }, 120);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (saveTimer) clearTimeout(saveTimer);
+    };
+  }, []);
+
+  // Restore scroll once positions exist. Priority:
+  //   1. lastPhoto:<path>  → scroll to whichever photo the user last viewed
+  //   2. scroll:<path>     → fall back to raw scrollY
+  // Runs only once per mount so a window resize doesn't yank the viewport.
+  const restoredRef = useRef(false);
+  useIsoLayoutEffect(() => {
+    if (containerHeight === 0 || restoredRef.current) return;
+    const path = window.location.pathname;
+
+    const lastPhotoId = sessionStorage.getItem(`lastPhoto:${path}`);
+    if (lastPhotoId) {
+      const pos = positions.find(
+        (p) => getPhotoId(p.image.public_id) === lastPhotoId
+      );
+      if (pos) {
+        // Header (logo) ~64px + nav (~52px) ≈ 130px of fixed chrome.
+        // Land the photo just under the chrome.
+        const HEADER_OFFSET = 130;
+        const y = Math.max(0, pos.y - HEADER_OFFSET + 8);
+        window.scrollTo(0, y);
+        sessionStorage.removeItem(`lastPhoto:${path}`);
+        restoredRef.current = true;
+        return;
+      }
+    }
+
+    const saved = sessionStorage.getItem(`scroll:${path}`);
+    if (saved) {
+      const y = parseInt(saved, 10);
+      if (!Number.isNaN(y) && y > 0) {
+        window.scrollTo(0, y);
+      }
+    }
+    restoredRef.current = true;
+  }, [containerHeight, positions]);
 
   if (images.length === 0) {
     return (
@@ -79,12 +163,12 @@ export default function Gallery({ images, collection }: GalleryProps) {
   }
 
   return (
-    <div 
-      ref={containerRef} 
+    <div
+      ref={containerRef}
       className="relative w-full"
       style={{ height: containerHeight || "auto" }}
     >
-      {positions.map(({ image, x, y, width, height, originalIndex }) => {
+      {positions.map(({ image, x, y, width, height, index }) => {
         const photoId = getPhotoId(image.public_id);
         const href = collection
           ? `/photo/${photoId}?collection=${encodeURIComponent(collection)}`
@@ -93,24 +177,27 @@ export default function Gallery({ images, collection }: GalleryProps) {
           <Link
             key={image.public_id}
             href={href}
-            className="absolute cursor-pointer group active:opacity-70 transition-opacity duration-150"
+            prefetch={index < 8}
+            className="absolute cursor-pointer active:opacity-70 transition-opacity duration-150 rounded-sm overflow-hidden bg-black flex items-center justify-center"
             style={{
-              transform: `translate(${x}px, ${y}px)`,
+              transform: `translate3d(${x}px, ${y}px, 0)`,
               width: `${width}px`,
               height: `${height}px`,
             }}
-            prefetch={originalIndex < 8}
           >
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
+              <Image src="/logo.png" alt="" width={48} height={48} className="object-contain" priority={index < 6} />
+            </div>
             <Image
               src={image.secure_url}
               alt=""
               width={image.width}
               height={image.height}
-              placeholder={image.blur_data_url ? "blur" : "empty"}
-              blurDataURL={image.blur_data_url}
-              className="w-full h-full object-cover rounded-sm"
-              sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
-              loading={originalIndex < 8 ? "eager" : "lazy"}
+              placeholder="empty"
+              className="w-full h-full object-cover relative z-10"
+              sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw"
+              loading={index < 6 ? "eager" : "lazy"}
+              fetchPriority={index < 4 ? "high" : "auto"}
               style={{ imageOrientation: "from-image" }}
             />
           </Link>

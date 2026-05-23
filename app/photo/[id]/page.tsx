@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getImageByPhotoId, getAdjacentPhotos, getFullPublicId } from "@/lib/cloudinary";
 import PhotoViewer from "@/components/PhotoViewer";
 import { v2 as cloudinary } from "cloudinary";
+import cloudinaryLoader from "@/lib/cloudinary-loader";
 
 interface PhotoPageProps {
   params: Promise<{
@@ -14,18 +15,12 @@ interface PhotoPageProps {
 
 export const revalidate = 60;
 
-// Generate optimized URL for prefetching
+// Prefetch URL must match what the custom loader will request for <Image>,
+// otherwise the preload is wasted (different URL → different cache entry).
 function getPrefetchUrl(photoId: string | null): string | undefined {
   if (!photoId) return undefined;
-  
-  const fullPublicId = getFullPublicId(photoId);
-  return cloudinary.url(fullPublicId, {
-    transformation: [
-      { width: 1920, crop: "limit" },
-      { quality: "auto:best", fetch_format: "auto" },
-      { angle: "auto" }
-    ]
-  });
+  const baseUrl = cloudinary.url(getFullPublicId(photoId), { secure: true });
+  return cloudinaryLoader({ src: baseUrl, width: 1920, quality: 75 });
 }
 
 export default async function PhotoPage({ params, searchParams }: PhotoPageProps) {
