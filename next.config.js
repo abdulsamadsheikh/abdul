@@ -1,5 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Pin the workspace root so Turbopack doesn't walk up and find the orphan
+  // lockfile in Documents/Tidsfordriv/. That misdetection put the Turbopack
+  // cache in the wrong dir and caused "Failed to open database" crashes.
+  turbopack: {
+    root: __dirname,
+  },
   images: {
     remotePatterns: [
       {

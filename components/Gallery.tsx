@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import {
   useEffect,
   useLayoutEffect,
@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { CloudinaryImage } from "@/lib/cloudinary";
 import { getPhotoId } from "@/lib/utils";
+import LogoSpinner from "@/components/LogoSpinner";
 
 interface GalleryProps {
   images: CloudinaryImage[];
@@ -177,7 +178,7 @@ export default function Gallery({ images, collection }: GalleryProps) {
           <Link
             key={image.public_id}
             href={href}
-            prefetch={index < 8}
+            prefetch
             className="absolute cursor-pointer active:opacity-70 transition-opacity duration-150 rounded-sm overflow-hidden bg-black flex items-center justify-center"
             style={{
               transform: `translate3d(${x}px, ${y}px, 0)`,
@@ -196,13 +197,27 @@ export default function Gallery({ images, collection }: GalleryProps) {
               placeholder="empty"
               className="w-full h-full object-cover relative z-10"
               sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw"
-              loading={index < 6 ? "eager" : "lazy"}
+              loading={index < 8 ? "eager" : "lazy"}
               fetchPriority={index < 4 ? "high" : "auto"}
               style={{ imageOrientation: "from-image" }}
             />
+            <PendingOverlay />
           </Link>
         );
       })}
+    </div>
+  );
+}
+
+// Renders inside a <Link> — useLinkStatus reports `pending` while Next.js is
+// fetching the destination route. Shows the rotating logo immediately on click
+// so the user gets feedback instead of "nothing happened".
+function PendingOverlay() {
+  const { pending } = useLinkStatus();
+  if (!pending) return null;
+  return (
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 pointer-events-none">
+      <LogoSpinner size={36} />
     </div>
   );
 }

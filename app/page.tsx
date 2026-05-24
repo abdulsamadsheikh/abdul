@@ -1,5 +1,6 @@
 import Gallery from "@/components/Gallery";
 import CollectionsNav from "@/components/CollectionsNav";
+import Footer from "@/components/Footer";
 import { getImages, getCollections } from "@/lib/cloudinary";
 
 export const revalidate = 60;
@@ -27,9 +28,11 @@ export default async function Home() {
 
       <CollectionsNav collections={collections} />
 
-      <div className="pt-32 pb-8 px-1 sm:px-2">
+      <div className="pt-32 px-1 sm:px-2">
         <Gallery images={images} />
       </div>
+
+      <Footer />
     </main>
   );
 }

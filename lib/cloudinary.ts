@@ -1,6 +1,7 @@
 import { v2 as cloudinary } from "cloudinary";
 import { unstable_cache } from "next/cache";
 import { getPhotoId, getFullPublicId } from "./utils";
+import { parseGpsFromExif } from "./exif";
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -8,6 +9,12 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
   secure: true,
 });
+
+export interface GeoLocation {
+  lat: number;
+  lng: number;
+  altitude?: number;
+}
 
 export interface CloudinaryImage {
   public_id: string;
@@ -24,6 +31,8 @@ export interface CloudinaryImage {
   bytes?: number;
   original_width?: number;
   original_height?: number;
+  caption?: string;
+  location?: GeoLocation;
 }
 
 export interface Collection {
@@ -38,6 +47,7 @@ const BLUR_DATA_URL =
   "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A8A";
 
 function toCloudinaryImage(resource: any): CloudinaryImage {
+  const context = resource.context || {};
   return {
     public_id: resource.public_id,
     secure_url: cloudinary.url(resource.public_id, { secure: true }),
@@ -47,8 +57,9 @@ function toCloudinaryImage(resource: any): CloudinaryImage {
     created_at: resource.created_at,
     blur_data_url: BLUR_DATA_URL,
     folder: resource.folder,
-    context: resource.context || {},
+    context,
     etag: resource.etag || "",
+    caption: typeof context.caption === "string" ? context.caption : undefined,
   };
 }
 
@@ -149,6 +160,33 @@ export async function addImageToCollection(
   }
 }
 
+export async function setImageCaption(
+  publicId: string,
+  caption: string
+): Promise<boolean> {
+  try {
+    if (caption.trim() === "") {
+      // Clear caption — remove the field from context while preserving others
+      const existing = await cloudinary.api.resource(publicId, { context: true });
+      const ctx = existing.context?.custom || {};
+      delete ctx.caption;
+      // Re-set whatever's left (Cloudinary's API has no "remove single key")
+      const pairs = Object.entries(ctx)
+        .map(([k, v]) => `${k}=${String(v).replace(/[|=]/g, "")}`)
+        .join("|");
+      await cloudinary.uploader.remove_all_context([publicId]);
+      if (pairs) await cloudinary.uploader.add_context(pairs, [publicId]);
+    } else {
+      const sanitized = caption.replace(/[|=]/g, "");
+      await cloudinary.uploader.add_context(`caption=${sanitized}`, [publicId]);
+    }
+    return true;
+  } catch (error) {
+    console.error("Error setting caption:", error);
+    return false;
+  }
+}
+
 export async function removeFromCollection(publicId: string): Promise<boolean> {
   try {
     await cloudinary.uploader.remove_all_context([publicId]);
@@ -192,7 +230,8 @@ export async function getImageByPhotoId(
   const fullPublicId = getFullPublicId(photoId, folder);
   try {
     const result = await getCachedResource(fullPublicId);
-
+    const context = result.context || {};
+    const imageMetadata = result.image_metadata || {};
     return {
       public_id: result.public_id,
       secure_url: cloudinary.url(result.public_id, { secure: true }),
@@ -202,11 +241,13 @@ export async function getImageByPhotoId(
       created_at: result.created_at,
       blur_data_url: BLUR_DATA_URL,
       folder: result.folder,
-      context: result.context || {},
-      image_metadata: result.image_metadata || {},
+      context,
+      image_metadata: imageMetadata,
       bytes: result.bytes,
       original_width: result.width,
       original_height: result.height,
+      caption: typeof context.caption === "string" ? context.caption : undefined,
+      location: parseGpsFromExif(imageMetadata),
     };
   } catch (error) {
     const is404 =

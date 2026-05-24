@@ -1,5 +1,6 @@
 import Gallery from "@/components/Gallery";
 import CollectionsNav from "@/components/CollectionsNav";
+import Footer from "@/components/Footer";
 import { getImagesByCollection, getCollections } from "@/lib/cloudinary";
 import Link from "next/link";
 
@@ -47,7 +48,7 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
 
       <CollectionsNav collections={collections} />
 
-      <div className="pt-32 pb-8 px-1 sm:px-2">
+      <div className="pt-32 px-1 sm:px-2">
         {images.length > 0 ? (
           <Gallery images={images} collection={collectionName} />
         ) : (
@@ -66,6 +67,8 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
           </div>
         )}
       </div>
+
+      <Footer />
     </main>
   );
 }
