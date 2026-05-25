@@ -10,7 +10,7 @@ export default function Footer() {
           <span>© {year} Abdulsamad Sheikh</span>
         </div>
         <p className="text-white/30">
-          story of my life?? sliter litt psykisk. for mer, sjekk ut{" "}
+          sliter litt psykisk. vurderer å ikke velge kaffe imorgen. for mer, sjekk ut{" "}
           <a
             href="https://sheikh.as"
             target="_blank"
