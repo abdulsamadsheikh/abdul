@@ -177,7 +177,12 @@ export async function setImageCaption(
       await cloudinary.uploader.remove_all_context([publicId]);
       if (pairs) await cloudinary.uploader.add_context(pairs, [publicId]);
     } else {
-      const sanitized = caption.replace(/[|=]/g, "");
+      // Cloudinary context format is `key=value|key=value`. Strip any chars
+      // that would break the parser, including newlines.
+      const sanitized = caption
+        .replace(/[\r\n]+/g, " ")
+        .replace(/[|=]/g, "")
+        .trim();
       await cloudinary.uploader.add_context(`caption=${sanitized}`, [publicId]);
     }
     return true;
@@ -230,7 +235,16 @@ export async function getImageByPhotoId(
   const fullPublicId = getFullPublicId(photoId, folder);
   try {
     const result = await getCachedResource(fullPublicId);
-    const context = result.context || {};
+    // BUG FIX: Cloudinary's api.resource() returns context wrapped as
+    //   { context: { custom: { caption: "…" } } }
+    // but the search API returns it flat as
+    //   { context: { caption: "…" } }
+    // The flat path was undefined here, which is why saved captions disappeared
+    // when navigating to a photo (the per-photo viewer uses api.resource).
+    const rawContext = result.context || {};
+    const context = (rawContext.custom && typeof rawContext.custom === "object"
+      ? rawContext.custom
+      : rawContext) as Record<string, string>;
     const imageMetadata = result.image_metadata || {};
     return {
       public_id: result.public_id,
